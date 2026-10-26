@@ -526,6 +526,58 @@ def main() -> None:
             ) < 2, synthetic_stats
             assert synthetic_stats["chainLoads"] == 0, synthetic_stats
 
+            # 5g. A real tap on the official pager on a phone is also routed
+            #     through the same anchored direct path, so manual use cannot
+            #     land on the next pager either.
+            manual_mobile = browser.new_page(
+                viewport={"width": 390, "height": 760},
+                has_touch=True,
+                is_mobile=True,
+            )
+            manual_mobile.on(
+                "pageerror",
+                lambda error: errors.append(f"manual mobile pager pageerror: {error}"),
+            )
+            manual_mobile.goto(f"{base}/test/fixture.html")
+            manual_mobile.add_script_tag(path=str(ROOT / "client.js"))
+            manual_mobile.evaluate(
+                """() => {
+                  window.__noAnchor = true;
+                  localStorage.setItem('dsh-fast-history.settings.v1', JSON.stringify({
+                    enabled: true, prefetchPages: 0, thresholdPx: 96, preloadScreens: 1.5,
+                  }));
+                  localStorage.setItem('dsh-fast-history.debug', '1');
+                }"""
+            )
+            manual_mobile.evaluate("() => window.__applyPlugin()")
+            manual_mobile.wait_for_timeout(300)
+            manual_mobile.locator("#pager").click()
+            manual_mobile.wait_for_timeout(900)
+            manual_stats = manual_mobile.evaluate(
+                "() => window.__DSH_FAST_HISTORY__.stats()"
+            )
+            manual_count = manual_mobile.evaluate("() => window.__loadCount || 0")
+            manual_pager = manual_mobile.evaluate("() => window.__pagerClicks || 0")
+            manual_scroll = manual_mobile.evaluate(
+                "() => document.getElementById('scroller').scrollTop"
+            )
+            print(
+                "manual mobile pager:",
+                manual_count,
+                "pager:",
+                manual_pager,
+                "scrollTop:",
+                manual_scroll,
+                json.dumps(manual_stats, ensure_ascii=False),
+            )
+            assert manual_count == 1, f"manual mobile pager should load one page, got {manual_count}"
+            assert manual_pager == 0, f"manual mobile pager must be intercepted, got {manual_pager}"
+            assert manual_scroll > 4, f"manual mobile pager anchor failed: {manual_scroll}"
+            assert manual_stats["lastDriftPx"] is None or abs(
+                manual_stats["lastDriftPx"]
+            ) < 2, manual_stats
+            assert manual_stats["chainLoads"] == 0, manual_stats
+
             # 6. Desktop top click still uses the official pager (the mobile
             #    suppression above must not disable the anchored path on web).
             top = browser.new_page(viewport={"width": 900, "height": 700})

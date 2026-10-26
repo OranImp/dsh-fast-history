@@ -81,7 +81,7 @@ window.__DSH_FAST_HISTORY__.setSettings({ prefetchPages: 0, preloadScreens: 2 })
 - **Hard eviction is not implemented**: the public `SessionFace` has no trim API; the plugin does not mutate private fields or `eventSource.replace`. Growth is bounded by user browsing + at most 2 prefetched pages (default 1) + up to 4 chain pages.
 - **One-turn / huge sessions**: official pagination can load the whole log on the first page; the plugin does not change official paging and skips prefetch when the initial window is heavy.
 - **Localization of the pager**: matches `加载更早 / 加载更多 / Load earlier / Load more`; otherwise uses the structural fallback, then a direct `loadOlder()`.
-- **Mobile coexistence**: in the dsh-mobile dedicated layout (`.dshm-main` / `[data-dsh-mobile-frame]`) the plugin binds the mobile conversation. On phones the early path is a direct `loadOlder()` with an old-top-row correction. If dsh-mobile’s 64 px gate fires `button.click()`, the plugin intercepts that **untrusted** pager click and routes it through the same anchored direct path; a real user click remains trusted and keeps the official pager behavior.
+- **Mobile coexistence**: in the dsh-mobile dedicated layout (`.dshm-main` / `[data-dsh-mobile-frame]`) the plugin binds the mobile conversation. On phones the early path is a direct `loadOlder()` with an old-top-row correction, and pager clicks are routed through the same anchored direct path — both dsh-mobile’s synthetic `button.click()` and a real tap. Desktop keeps the official pager behavior.
 - **Other profiles**: if your phone app connects to a different DSH profile, install the bundle there too.
 
 ### Tests
@@ -175,7 +175,7 @@ window.__DSH_FAST_HISTORY__.setSettings({ prefetchPages: 0, preloadScreens: 2 })
 - **提前量**：有效触发距离 = `max(96px, scroller.clientHeight × preloadScreens)`；默认 1.5 屏。接近已加载头部时即触发，不必看到 pager。
 - **手势**：只响应 `wheel` / `touch` / `ArrowUp|PageUp|Home` 输入；wheel 进入提前区即触发；触摸手势只记下待加载意图，手指抬起且滚动停稳后再触发，不会在手指移动中插入内容。同页脚本也可以合成这些事件或直接点官方 pager，因此这不是安全边界，只是交互门控。
 - **触摸屏/手机**：`touchstart` 后，手指向下滑（看更早内容）且进入提前区时，只记下待加载意图；手指抬起且滚动停稳（约 140ms）后才加载，避免和浏览器的滚动锚定/惯性抢位置。只处理单指，双指缩放和嵌套滚动区（代码块等）不触发。手机浏览器按窄视口/粗指针/触摸能力识别，不要求 dsh-mobile 专用布局；dsh-mobile 布局会优先绑定。
-- **与 dsh-mobile 共存**：提前区/续加载用 `loadOlder()` 直连；真正到顶（≤4px）时桌面点官方 pager，手机用直接加载 + 自锚定。dsh-mobile 的 64px gate 若调用 `button.click()`，插件会拦截这个 untrusted pager click，改走同一条锚定直连；真实用户点击仍是 trusted，保留官方 pager 行为。
+- **与 dsh-mobile 共存**：提前区/续加载用 `loadOlder()` 直连；真正到顶（≤4px）时桌面点官方 pager，手机用直接加载 + 自锚定。手机上的 pager 点击（包括 dsh-mobile 的 64px gate 合成 click 和真实手指点击）都改走同一条锚定直连；桌面仍保留官方 pager 行为。
 - **快速滑动/惯性**：用 `scrollTop` 速度和单事件位移识别快速滑动；高速阶段不发起加载、不写 `scrollTop`，链式补页也暂停，等惯性停稳约 140ms 后再加载。快速滑到顶部时可能短暂看到“加载更早”，停稳后才补页，这是为了不打断滚动。
 - **程序化滚动**：不会把 host 的 prepend 补偿当成用户手势自触发；新的独立手势之间有 400ms cooldown。
 - **连续补页**：一页落下后，如果 `scrollTop` 仍在提前区内且 `hasMore`，桌面 80ms / 手机/粗指针 160ms 后自动再加载一页；一次接近最多 4 页（含第一次），头部离开提前区、历史耗尽、失败或切会话即停止。触摸进行中或高速滚动时链式补页暂停，停稳后继续。
@@ -203,7 +203,7 @@ python3 test/browser_test.py
 # CHROMIUM_PATH=/path/to/chrome python3 test/browser_test.py
 ```
 
-浏览器 fixture 覆盖：预取 1 页、pager 仍在视口外时提前加载、提前区内自动续加载一页、官方 pager 手动仍可用、清理后不再自动加载、调试全局删除、dsh-mobile overlay 的手机上下文、无 overlay 的普通手机浏览器、快速滑动停稳前后不提前加载、body 焦点键盘 PageUp、resync 后重新预取、同会话 aria-hidden 重绑不重复预取、顶部无锚点时只点一次 pager 不续链、手机顶部无浏览器锚定时旧行仍保持、手机合成 pager click 被拦截并改走锚定直连、无页面错误。
+浏览器 fixture 覆盖：预取 1 页、pager 仍在视口外时提前加载、提前区内自动续加载一页、官方 pager 手动仍可用、清理后不再自动加载、调试全局删除、dsh-mobile overlay 的手机上下文、无 overlay 的普通手机浏览器、快速滑动停稳前后不提前加载、body 焦点键盘 PageUp、resync 后重新预取、同会话 aria-hidden 重绑不重复预取、顶部无锚点时只点一次 pager 不续链、手机顶部无浏览器锚定时旧行仍保持、手机合成/真实 pager click 都改走锚定直连、无页面错误。
 
 ### 卸载
 

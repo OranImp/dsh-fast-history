@@ -1887,7 +1887,6 @@ window.__ModuleLoader__.load({
 
       handlePagerClick(event) {
         if (this.disposed || !this.settings.enabled) return;
-        if (event.isTrusted) return;
         if (!isMobileContext(document)) return;
         if (!this.scroller || !this.rootEl) return;
         const target = event.target;
@@ -1896,10 +1895,10 @@ window.__ModuleLoader__.load({
         if (!button) return;
         const pager = this.findPager();
         if (!pager || pager.button !== button) return;
-        // dsh-mobile's 64 px gate (and other mobile helpers) call button.click().
-        // Letting the official handler run would use beginPaging and can land on
-        // the next pager. Swallow the synthetic click and take the anchored
-        // direct path instead; real user clicks are trusted and stay official.
+        // On phones, do not let the official handler run: beginPaging can land
+        // on the next pager. This covers dsh-mobile's synthetic click and a real
+        // tap; both use the anchored direct path. Desktop keeps the official
+        // pager behavior.
         event.preventDefault();
         event.stopPropagation();
         if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
@@ -1912,7 +1911,7 @@ window.__ModuleLoader__.load({
         this.armedKind = 'pager';
         this.pendingLoadAfterSettle = false;
         this.requestLoad('gesture');
-        this.debugLog('intercepted synthetic pager click; using anchored direct load');
+        this.debugLog('intercepted mobile pager click; using anchored direct load');
       }
 
       handleKeyDown(event) {
