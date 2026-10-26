@@ -28,7 +28,7 @@ This plugin fills those gaps without changing the host or the model context.
 3. **Early auto-load** — when you are within **1.5 screens** (configurable: 1/1.5/2) of the loaded head, load before the “Load earlier” control becomes the only way to continue. Early loads call `loadOlder()` directly because the official button is offscreen and `beginPaging()` would anchor to the oldest row.
 4. **Chain fill** — if one page is shorter than the lead, continue up to 4 pages per approach (including the first); stop when the head leaves the lead, history ends, a load fails, or the session switches.
 5. **Touch / mobile** — touch input is supported; single-finger only; pinch and nested scrollers (e.g. code blocks) are ignored. Loads are deferred until the finger lifts and the scroll is quiet for ~140 ms: no load and **no `scrollTop` writes** while a finger is down or momentum is running. Phone/coarse-pointer contexts use the longer 160 ms chain gap.
-6. **Top anchor** — at the true top (≤4 px) with the finger lifted, use the official pager so `beginPaging()` preserves the reading anchor. A direct top load that fails to move the viewport stops the chain instead of looping.
+6. **Top anchor** — at the true top (≤4 px) with the finger lifted, a phone uses a direct load and the plugin keeps the old top row fixed; the official pager is not clicked (its `beginPaging()` seat can land on the next pager). Desktop keeps the official pager path. A top pull loads exactly one page and never chains.
 7. **Memory discipline** — scalar state, official object references, and DOM references only; no history entries copied; prefetch and chain are bounded; no full-history preload.
 
 ### Install
@@ -81,7 +81,7 @@ window.__DSH_FAST_HISTORY__.setSettings({ prefetchPages: 0, preloadScreens: 2 })
 - **Hard eviction is not implemented**: the public `SessionFace` has no trim API; the plugin does not mutate private fields or `eventSource.replace`. Growth is bounded by user browsing + at most 2 prefetched pages (default 1) + up to 4 chain pages.
 - **One-turn / huge sessions**: official pagination can load the whole log on the first page; the plugin does not change official paging and skips prefetch when the initial window is heavy.
 - **Localization of the pager**: matches `加载更早 / 加载更多 / Load earlier / Load more`; otherwise uses the structural fallback, then a direct `loadOlder()`.
-- **Mobile coexistence**: in the dsh-mobile dedicated layout (`.dshm-main` / `[data-dsh-mobile-frame]`) the plugin binds the mobile conversation; at the top it uses the official pager. dsh-mobile’s own 64 px gate may click the same button, but both check disabled/loading and will not loop.
+- **Mobile coexistence**: in the dsh-mobile dedicated layout (`.dshm-main` / `[data-dsh-mobile-frame]`) the plugin binds the mobile conversation. On phones the early path is a direct `loadOlder()` with an old-top-row correction. If dsh-mobile’s 64 px gate fires `button.click()`, the plugin intercepts that **untrusted** pager click and routes it through the same anchored direct path; a real user click remains trusted and keeps the official pager behavior.
 - **Other profiles**: if your phone app connects to a different DSH profile, install the bundle there too.
 
 ### Tests
@@ -120,7 +120,7 @@ session the tool call is `plugin_manager action=remove_bundle target="dsh-fast-h
 
 1. **首屏**：不改变官方尾部优先策略，不增加首屏请求。
 2. **预取**：首屏稳定且会话空闲时，后台直接调用 `SessionFace.loadOlder()` 预读 1 页（可配置 0/1/2），让第一次上滑通常无需等待。
-3. **提前自动加载**：用 wheel / touch / 键盘输入方向门控；在距离已加载头部还有 **1.5 屏**（可设 1/1.5/2 屏）时就开始加载，而不是等只能靠点「加载更早」继续。提前加载使用 `loadOlder()` 直接请求，避免在 pager 不在视口时调用官方 `beginPaging` 造成跳动；真正滚到顶部（≤4px）且手指已抬起时，桌面端和移动端都走官方 pager 点击，让 Chat 的 `beginPaging` 保留阅读锚点；提前加载仍用 `loadOlder()` 直连。移动端之前不在顶部点 pager，导致顶部直接 prepend 后视口留在顶部、按钮跳到下一页；0.2.3 起修正了这一点。
+3. **提前自动加载**：用 wheel / touch / 键盘输入方向门控；在距离已加载头部还有 **1.5 屏**（可设 1/1.5/2 屏）时就开始加载，而不是等只能靠点「加载更早」继续。提前加载使用 `loadOlder()` 直接请求；手机/粗指针上，加载后由插件把加载前的顶部可见消息行按原位置钉住（不在手指/惯性期间写 `scrollTop`）。真正到顶（≤4px）时：桌面点官方 pager，手机走直接加载 + 锚定校正，避免官方 `beginPaging()` 把视口落到下一个 pager。
 4. **连续补页**：如果一页内容不足以填满提前量，插件会在页与页之间自动续加载，一次接近最多 4 页（含第一次），直到头部离开提前区或历史耗尽，让上滑过程尽量不出现按钮/加载态。
 5. **内存**：只保留标量状态、官方对象引用和 DOM 引用；不复制历史事件，不预读整条历史，预取和续加载都有页数/条数预算。
 
@@ -175,11 +175,11 @@ window.__DSH_FAST_HISTORY__.setSettings({ prefetchPages: 0, preloadScreens: 2 })
 - **提前量**：有效触发距离 = `max(96px, scroller.clientHeight × preloadScreens)`；默认 1.5 屏。接近已加载头部时即触发，不必看到 pager。
 - **手势**：只响应 `wheel` / `touch` / `ArrowUp|PageUp|Home` 输入；wheel 进入提前区即触发；触摸手势只记下待加载意图，手指抬起且滚动停稳后再触发，不会在手指移动中插入内容。同页脚本也可以合成这些事件或直接点官方 pager，因此这不是安全边界，只是交互门控。
 - **触摸屏/手机**：`touchstart` 后，手指向下滑（看更早内容）且进入提前区时，只记下待加载意图；手指抬起且滚动停稳（约 140ms）后才加载，避免和浏览器的滚动锚定/惯性抢位置。只处理单指，双指缩放和嵌套滚动区（代码块等）不触发。手机浏览器按窄视口/粗指针/触摸能力识别，不要求 dsh-mobile 专用布局；dsh-mobile 布局会优先绑定。
-- **与 dsh-mobile 共存**：提前区/续加载用 `loadOlder()` 直连；只有真正到顶（≤4px）且手指抬起后才点官方 pager，用官方锚定。dsh-mobile 自带的 64px gate 也可能点同一个按钮，但两边都会先检查按钮 disabled/loading，不会循环。
+- **与 dsh-mobile 共存**：提前区/续加载用 `loadOlder()` 直连；真正到顶（≤4px）时桌面点官方 pager，手机用直接加载 + 自锚定。dsh-mobile 的 64px gate 若调用 `button.click()`，插件会拦截这个 untrusted pager click，改走同一条锚定直连；真实用户点击仍是 trusted，保留官方 pager 行为。
 - **快速滑动/惯性**：用 `scrollTop` 速度和单事件位移识别快速滑动；高速阶段不发起加载、不写 `scrollTop`，链式补页也暂停，等惯性停稳约 140ms 后再加载。快速滑到顶部时可能短暂看到“加载更早”，停稳后才补页，这是为了不打断滚动。
 - **程序化滚动**：不会把 host 的 prepend 补偿当成用户手势自触发；新的独立手势之间有 400ms cooldown。
 - **连续补页**：一页落下后，如果 `scrollTop` 仍在提前区内且 `hasMore`，桌面 80ms / 手机/粗指针 160ms 后自动再加载一页；一次接近最多 4 页（含第一次），头部离开提前区、历史耗尽、失败或切会话即停止。触摸进行中或高速滚动时链式补页暂停，停稳后继续。
-- **锚定**：真正在顶部（≤4px）且手指已抬起时点击官方 pager（桌面和移动端），交给 Chat 自己的 `beginPaging`；提前加载走直接 `loadOlder()`，依赖 Chat 的浏览器锚定。桌面端只有在停稳且漂移 > 2px 时才用顶部可见行校正 `scrollTop`；手机/粗指针上下文不写 `scrollTop`，避免和手指/惯性滚动打架。顶部如果 direct 加载后仍在 0px（锚定失败），不再链式补页，避免循环。
+- **锚定**：提前/手机顶部加载走直接 `loadOlder()`，加载前记录顶部可见行（`data-chat-anchor-key` + rect），加载后若行仍在则把它的位置钉回原处；手机也做这个校正，但只在手指/惯性停止后写 `scrollTop`，并加 120ms × 最多 6 次的延迟重试。真正在顶部（≤4px）且桌面时点击官方 pager，交给 Chat 自己的 `beginPaging`。顶部 direct 加载后如果仍在 0px（锚定失败），只加载一页、不链式补页，避免循环。
 - **会话切换**：按 `[data-conversation-session]` 识别；切换/视图切换/滚动容器复用都会 teardown 旧监听与定时器；旧异步结果按 generation 丢弃。
 - **清理**：插件停用/卸载时移除所有监听、Observer、定时器、订阅；调试全局变量删除。
 
@@ -188,7 +188,7 @@ window.__DSH_FAST_HISTORY__.setSettings({ prefetchPages: 0, preloadScreens: 2 })
 - **硬回收不存在**：公开的 `SessionFace` 没有裁剪已加载窗口的方法，插件也不会改私有字段或 `eventSource.replace`。内存增长仍由“用户浏览 + 最多 2 页预取（默认 1） + 一次接近最多 4 页提前加载”驱动；不预读整条历史。
 - **单 Turn/超大会话**：官方分页要求至少 2 个 Turn 且 50 条消息，某些会话首屏就会整条加载；插件不修改官方分页，只避免额外预取。
 - **多语言按钮**：pager 文本匹配 zh/en；其他语言走结构 fallback（`_older` 容器），再失败走 `loadOlder()`。
-- **移动端**：手机浏览器和 dsh-mobile 专用布局都可用；手机/小屏按窄视口、粗指针或触摸能力识别，不要求 `.dshm-main`。提前区用 `loadOlder()`，真正到顶时点官方 pager 以保留锚点。若你的手机 App 连接的是另一个 DSH profile，需要把本插件也安装到那个 profile。
+- **移动端**：手机浏览器和 dsh-mobile 专用布局都可用；手机/小屏按窄视口、粗指针或触摸能力识别，不要求 `.dshm-main`。提前区和真正到顶都用 `loadOlder()` 直连，并做旧顶部行校正；桌面顶部才点官方 pager。若你的手机 App 连接的是另一个 DSH profile，需要把本插件也安装到那个 profile。
 - **上下文不变**：加载历史只影响客户端事件窗口；模型上下文由 Host 从持久日志组装。
 
 ### 测试
@@ -203,7 +203,7 @@ python3 test/browser_test.py
 # CHROMIUM_PATH=/path/to/chrome python3 test/browser_test.py
 ```
 
-浏览器 fixture 覆盖：预取 1 页、pager 仍在视口外时提前加载、提前区内自动续加载一页、官方 pager 手动仍可用、清理后不再自动加载、调试全局删除、dsh-mobile overlay 的手机上下文、无 overlay 的普通手机浏览器、快速滑动停稳前后不提前加载、body 焦点键盘 PageUp、resync 后重新预取、同会话 aria-hidden 重绑不重复预取、顶部无锚点时只点一次 pager 不续链、无页面错误。
+浏览器 fixture 覆盖：预取 1 页、pager 仍在视口外时提前加载、提前区内自动续加载一页、官方 pager 手动仍可用、清理后不再自动加载、调试全局删除、dsh-mobile overlay 的手机上下文、无 overlay 的普通手机浏览器、快速滑动停稳前后不提前加载、body 焦点键盘 PageUp、resync 后重新预取、同会话 aria-hidden 重绑不重复预取、顶部无锚点时只点一次 pager 不续链、手机顶部无浏览器锚定时旧行仍保持、手机合成 pager click 被拦截并改走锚定直连、无页面错误。
 
 ### 卸载
 

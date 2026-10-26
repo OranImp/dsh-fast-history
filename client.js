@@ -18,7 +18,7 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const h = React.createElement;
 
-    const VERSION = '0.2.4';
+    const VERSION = '0.2.5';
     const NS = 'dsh-fast-history';
     const SETTINGS_KEY = 'dsh-fast-history.settings.v1';
     const DEBUG_KEY = 'dsh-fast-history.debug';
@@ -51,6 +51,8 @@ window.__ModuleLoader__.load({
     const FAST_SCROLL_VELOCITY_PX_PER_MS = 0.75;
     const FAST_SCROLL_DELTA_PX = 20;
     const SCROLL_SETTLE_MS = 140;
+    const ANCHOR_RETRY_MS = 120;
+    const ANCHOR_RETRY_LIMIT = 6;
 
     const zh = {
       title: '历史消息加载',
@@ -502,7 +504,7 @@ window.__ModuleLoader__.load({
         this.armedKind = null;
         this.lastTop = 0;
         this.lastScrollAt = 0;
-        this.lastLoadAt = 0;
+        this.lastLoadAt = -COOLDOWN_MS;
         this.failureUntil = 0;
         this.touch = null;
         this.scrollVelocity = 0;
@@ -510,6 +512,9 @@ window.__ModuleLoader__.load({
         this.scrollSettleTimer = null;
         this.scrollSettleDeadline = 0;
         this.pendingLoadAfterSettle = false;
+        this.anchorTimer = null;
+        this.anchorAttempts = 0;
+        this.internalScroll = false;
 
         this.chainActive = false;
         this.chainCount = 0;
@@ -576,6 +581,7 @@ window.__ModuleLoader__.load({
         this.onTouchCancel = () => this.handleTouchCancel();
         this.onScrollEnd = () => this.handleScrollEnd();
         this.onKeyDown = (event) => this.handleKeyDown(event);
+        this.onPagerClick = (event) => this.handlePagerClick(event);
       }
 
       start() {
@@ -860,7 +866,7 @@ window.__ModuleLoader__.load({
         this.armed = false;
         this.armedKind = null;
         this.touch = null;
-        this.lastLoadAt = 0;
+        this.lastLoadAt = -COOLDOWN_MS;
         this.failureUntil = 0;
         this.lastScrollAt = 0;
         this.openEntries = null;
@@ -890,6 +896,7 @@ window.__ModuleLoader__.load({
           scroller.addEventListener('touchend', this.onTouchEnd, { passive: true });
           scroller.addEventListener('touchcancel', this.onTouchCancel, { passive: true });
           scroller.addEventListener('scrollend', this.onScrollEnd, { passive: true });
+          scroller.addEventListener('click', this.onPagerClick, true);
           document.addEventListener('keydown', this.onKeyDown, true);
         } catch {
           /* ignore */
@@ -907,6 +914,7 @@ window.__ModuleLoader__.load({
             scroller.removeEventListener('touchend', this.onTouchEnd);
             scroller.removeEventListener('touchcancel', this.onTouchCancel);
             scroller.removeEventListener('scrollend', this.onScrollEnd);
+            scroller.removeEventListener('click', this.onPagerClick, true);
           } catch {
             /* ignore */
           }
@@ -1079,6 +1087,12 @@ window.__ModuleLoader__.load({
         this.fastScrolling = false;
         this.scrollVelocity = 0;
         this.pendingLoadAfterSettle = false;
+        if (this.anchorTimer !== null) {
+          clearTimeout(this.anchorTimer);
+          this.anchorTimer = null;
+        }
+        this.anchorAttempts = 0;
+        this.internalScroll = false;
       }
 
       resetPrefetchWindow(entries) {
@@ -1314,9 +1328,16 @@ window.__ModuleLoader__.load({
       async loadOnePage(kind) {
         const chain = kind === 'chain';
         if (chain ? !this.canChainLoad() : !this.canGestureLoad()) return;
+        this.cancelAnchorCorrection();
+        const topBefore = this.scroller ? Number(this.scroller.scrollTop) || 0 : 0;
+        const startedAtTop = topBefore <= PAGER_CLICK_MAX_PX;
+        // On phones, use the public face even at the true top. The official
+        // pager's beginPaging anchors the first paging seat; when that seat is
+        // the pager/header the viewport can land on the *next* pager. A direct
+        // load + our own old-top-row correction keeps the reading position.
         const usePager = !this.touch
-          && this.scroller
-          && Number(this.scroller.scrollTop) <= PAGER_CLICK_MAX_PX;
+          && !isMobileContext(document)
+          && startedAtTop;
         const pager = usePager ? this.findPager() : null;
         if (pager && (pager.button.disabled || pager.button.getAttribute('aria-disabled') === 'true')) {
           // The official pager is busy (or about to be). Do not double-load.
@@ -1387,6 +1408,7 @@ window.__ModuleLoader__.load({
           anchor,
           used,
           started,
+          startedAtTop,
           outcome,
         });
       }
@@ -1397,6 +1419,58 @@ window.__ModuleLoader__.load({
         const row = topVisibleRow(this.scroller, flow);
         if (!row) return null;
         return { key: row.key, top: row.top };
+      }
+
+      applyAnchorCorrection(anchor, gen) {
+        if (gen !== this.generation || this.disposed || !this.scroller || !anchor) return false;
+        if (this.touch || this.fastScrolling) return false;
+        const flow = this.findFlow();
+        const row = flow ? findRowByKey(flow, anchor.key) : null;
+        if (!row) return false;
+        const drift = row.getBoundingClientRect().top - anchor.top;
+        if (Math.abs(drift) <= 2) return false;
+        const max = Math.max(0, this.scroller.scrollHeight - this.scroller.clientHeight);
+        // This write is ours, not a user gesture: do not let it arm, disarm
+        // or look like momentum to the gate/chain.
+        this.internalScroll = true;
+        this.scroller.scrollTop = Math.max(0, Math.min(max, this.scroller.scrollTop + drift));
+        this.lastTop = Number(this.scroller.scrollTop) || 0;
+        const raf = typeof requestAnimationFrame === 'function'
+          ? requestAnimationFrame
+          : (fn) => setTimeout(fn, 16);
+        raf(() => {
+          if (gen === this.generation) this.internalScroll = false;
+        });
+        this.debugLog('corrected direct-load anchor', Math.round(drift));
+        return true;
+      }
+
+      scheduleAnchorCorrection(anchor, gen) {
+        if (gen !== this.generation || this.disposed || !anchor) return;
+        if (this.anchorTimer !== null) {
+          clearTimeout(this.anchorTimer);
+          this.anchorTimer = null;
+        }
+        this.anchorAttempts = 0;
+        const tick = () => {
+          this.anchorTimer = null;
+          if (gen !== this.generation || this.disposed) return;
+          // A finger-down or momentum state must not receive a scrollTop
+          // write; wait for the next quiet tick instead.
+          if (!this.touch && !this.fastScrolling && this.applyAnchorCorrection(anchor, gen)) return;
+          if (this.anchorAttempts >= ANCHOR_RETRY_LIMIT) return;
+          this.anchorAttempts += 1;
+          this.anchorTimer = setTimeout(tick, ANCHOR_RETRY_MS);
+        };
+        this.anchorTimer = setTimeout(tick, ANCHOR_RETRY_MS);
+      }
+
+      cancelAnchorCorrection() {
+        if (this.anchorTimer !== null) {
+          clearTimeout(this.anchorTimer);
+          this.anchorTimer = null;
+        }
+        this.anchorAttempts = 0;
       }
 
       // -- page settle / completion -------------------------------------
@@ -1524,17 +1598,29 @@ window.__ModuleLoader__.load({
             if (row) {
               const drift = row.getBoundingClientRect().top - info.anchor.top;
               this.stats.lastDriftPx = Math.round(drift * 100) / 100;
-              const settled = !this.touch
-                && !this.fastScrolling
-                && !isMobileContext(document)
-                && now() - this.lastScrollAt >= SCROLL_SETTLE_MS;
-              // Never write scrollTop while a finger or momentum is moving:
-              // the browser's scroll anchoring owns the position then, and a
-              // competing write is what makes fast flings twitch.
-              if (info.used === 'direct' && Math.abs(drift) > 2 && this.scroller && settled) {
-                const max = Math.max(0, this.scroller.scrollHeight - this.scroller.clientHeight);
-                this.scroller.scrollTop = Math.max(0, Math.min(max, this.scroller.scrollTop + drift));
-                this.debugLog('corrected fallback drift', drift);
+              // A direct load has no official beginPaging owner. Keep the old
+              // top row fixed ourselves, including on phones: otherwise the
+              // prepended page shifts the viewport up and can land on the next
+              // pager. Do not write while a finger or momentum is moving.
+              if (info.used === 'direct') {
+                const canWriteNow = !this.touch && !this.fastScrolling;
+                let corrected = false;
+                if (canWriteNow) corrected = this.applyAnchorCorrection(info.anchor, gen);
+                let remaining = drift;
+                if (corrected) {
+                  const afterRow = flow ? findRowByKey(flow, info.anchor.key) : null;
+                  if (afterRow) {
+                    remaining = afterRow.getBoundingClientRect().top - info.anchor.top;
+                    this.stats.lastDriftPx = Math.round(remaining * 100) / 100;
+                  }
+                }
+                // A delayed retry is only needed when we could not write now
+                // (finger down / momentum) or the immediate correction did
+                // not take. A stale retry after a normal load would yank a
+                // reader who has already scrolled away.
+                if (!canWriteNow || Math.abs(remaining) > 2) {
+                  this.scheduleAnchorCorrection(info.anchor, gen);
+                }
               }
             }
           }
@@ -1553,8 +1639,10 @@ window.__ModuleLoader__.load({
             && this.chainCount < MAX_CHAIN_PAGES
             && top <= margin
             && !stuckAtTop
+            && !info.startedAtTop
             && now() >= this.failureUntil;
           if (stuckAtTop) this.debugLog('page load left the viewport at the top; stop chain');
+          if (info.startedAtTop) this.debugLog('explicit top pull; one page only');
           if (canContinue) {
             this.chainActive = true;
             this.scheduleChain();
@@ -1623,6 +1711,13 @@ window.__ModuleLoader__.load({
         if (!this.scroller) return;
         const top = Number(this.scroller.scrollTop) || 0;
         const t = now();
+        if (this.internalScroll) {
+          this.lastTop = top;
+          return;
+        }
+        // A delayed anchor retry belongs to the load that scheduled it. Once
+        // the reader moves the viewport up, that retry must not yank them back.
+        if (top < this.lastTop - 0.5) this.cancelAnchorCorrection();
         const dt = Math.max(1, t - this.lastScrollAt);
         const delta = Math.abs(top - this.lastTop);
         this.scrollVelocity = delta / dt;
@@ -1692,6 +1787,7 @@ window.__ModuleLoader__.load({
       handleWheel(event) {
         if (!this.scroller || this.disposed) return;
         if (!this.settings.enabled) return;
+        this.cancelAnchorCorrection();
         if (event.ctrlKey) return;
         if (nearestNestedScroller(event.target, this.scroller, window)) return;
         const deltaY = Number(event.deltaY);
@@ -1716,6 +1812,7 @@ window.__ModuleLoader__.load({
 
       handleTouchStart(event) {
         if (this.disposed || !this.scroller || !this.settings.enabled) return;
+        this.cancelAnchorCorrection();
         if (event.touches && event.touches.length !== 1) return;
         if (nearestNestedScroller(event.target, this.scroller, window)) return;
         const touch = event.touches && event.touches[0];
@@ -1788,8 +1885,39 @@ window.__ModuleLoader__.load({
         }
       }
 
+      handlePagerClick(event) {
+        if (this.disposed || !this.settings.enabled) return;
+        if (event.isTrusted) return;
+        if (!isMobileContext(document)) return;
+        if (!this.scroller || !this.rootEl) return;
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const button = target.closest('button');
+        if (!button) return;
+        const pager = this.findPager();
+        if (!pager || pager.button !== button) return;
+        // dsh-mobile's 64 px gate (and other mobile helpers) call button.click().
+        // Letting the official handler run would use beginPaging and can land on
+        // the next pager. Swallow the synthetic click and take the anchored
+        // direct path instead; real user clicks are trusted and stay official.
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
+        if (this.inFlight || this.isCooldown()) return;
+        if (!this.snapshot || this.snapshot.openState !== 'open' || !this.snapshot.hasMore) return;
+        if (this.snapshot.loadingOlder) return;
+        const top = Number(this.scroller.scrollTop) || 0;
+        if (top > this.autoMargin()) return;
+        this.armed = true;
+        this.armedKind = 'pager';
+        this.pendingLoadAfterSettle = false;
+        this.requestLoad('gesture');
+        this.debugLog('intercepted synthetic pager click; using anchored direct load');
+      }
+
       handleKeyDown(event) {
         if (this.disposed || !this.settings.enabled) return;
+        this.cancelAnchorCorrection();
         if (event.defaultPrevented) return;
         if (event.repeat) return;
         if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;

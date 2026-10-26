@@ -138,6 +138,7 @@ def main() -> None:
             )
             page.wait_for_timeout(100)
             set_scroll(300)
+            page.wait_for_timeout(260)
             arm_wheel()
             page.wait_for_timeout(1200)
             print("after chain:", count(), json.dumps(stats(), ensure_ascii=False))
@@ -258,9 +259,10 @@ def main() -> None:
                   const scroller = document.getElementById('scroller');
                   scroller.dispatchEvent(new Event('touchend', { bubbles: true }));
                   scroller.scrollTop = 1000;
+                  scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
                 }"""
             )
-            mobile.wait_for_timeout(200)
+            mobile.wait_for_timeout(250)
             mobile.evaluate(
                 """() => {
                   const scroller = document.getElementById('scroller');
@@ -268,7 +270,7 @@ def main() -> None:
                   const start = new Event('touchstart', { bubbles: true, cancelable: true });
                   Object.defineProperty(start, 'touches', { value: [{ clientY: 300 }] });
                   row.dispatchEvent(start);
-                  for (const top of [880, 760, 640, 520, 400, 300]) {
+                  for (const top of [840, 720, 600, 480, 360, 300]) {
                     scroller.scrollTop = top;
                     scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
                   }
@@ -297,9 +299,10 @@ def main() -> None:
             assert mobile.evaluate("() => window.__pagerClicks || 0") == 0
             assert settled_stats["lastDriftPx"] is None or abs(settled_stats["lastDriftPx"]) < 2, settled_stats
 
-            # 5c. True top on mobile: the official pager must be used so
-            #     beginPaging preserves the reading anchor. A direct prepend
-            #     here would leave the viewport on the next page's pager.
+            # 5c. True top on mobile: a direct load plus the plugin's own
+            #     old-top-row correction. The official pager anchors the first
+            #     paging seat, which can land on the next pager on a phone.
+            before_top = mobile.evaluate("() => window.__loadCount || 0")
             mobile.evaluate(
                 """() => {
                   const scroller = document.getElementById('scroller');
@@ -321,17 +324,17 @@ def main() -> None:
                   row.dispatchEvent(end);
                 }"""
             )
-            mobile.wait_for_timeout(700)
+            mobile.wait_for_timeout(900)
             top_stats = mobile.evaluate("() => window.__DSH_FAST_HISTORY__.stats()")
             top_count = mobile.evaluate("() => window.__loadCount || 0")
             top_pager = mobile.evaluate("() => window.__pagerClicks || 0")
             top_scroll = mobile.evaluate("() => document.getElementById('scroller').scrollTop")
-            print("mobile top pager:", top_count, "pager:", top_pager, "scrollTop:", top_scroll, json.dumps(top_stats, ensure_ascii=False))
-            # One pull may buy the pager page plus the bounded chain fill.
-            assert 4 <= top_count <= 5, f"unexpected number of top loads: {top_count}"
-            assert top_pager == 1, f"mobile top must use the official pager, got {top_pager}"
-            assert top_scroll > 4, f"official pager anchor did not move the viewport: {top_scroll}"
-            assert top_stats["lastOutcome"] == "settled", top_stats
+            print("mobile top direct:", top_count, "pager:", top_pager, "scrollTop:", top_scroll, json.dumps(top_stats, ensure_ascii=False))
+            assert top_count == before_top + 1, f"top pull should add exactly one page, got {top_count - before_top}"
+            assert top_pager == 0, f"mobile top must not click the pager, got {top_pager}"
+            assert top_scroll > 4, f"top direct load did not preserve the reading anchor: {top_scroll}"
+            assert top_stats["lastDriftPx"] is None or abs(top_stats["lastDriftPx"]) < 2, top_stats
+            assert top_stats["chainLoads"] == 0, f"top pull must not chain, got {top_stats['chainLoads']}"
             mobile.wait_for_timeout(500)
             assert mobile.evaluate("() => window.__loadCount || 0") == top_count, "top loading looped after settle"
 
@@ -400,6 +403,129 @@ def main() -> None:
             assert phone_pager == 0, f"phone early load must not click the pager, got {phone_pager}"
             assert phone_stats["lastDriftPx"] is None or abs(phone_stats["lastDriftPx"]) < 2, phone_stats
 
+            # 5e. Mobile top with the browser's own anchor deliberately absent:
+            #     the plugin must keep the old top row itself, not land on the
+            #     new pager. This is the regression for "jump to next Load
+            #     earlier" on phones.
+            no_anchor_mobile = browser.new_page(
+                viewport={"width": 390, "height": 760},
+                has_touch=True,
+                is_mobile=True,
+            )
+            no_anchor_mobile.on(
+                "pageerror",
+                lambda error: errors.append(f"no-anchor mobile pageerror: {error}"),
+            )
+            no_anchor_mobile.goto(f"{base}/test/fixture.html")
+            no_anchor_mobile.add_script_tag(path=str(ROOT / "client.js"))
+            no_anchor_mobile.evaluate(
+                """() => {
+                  window.__noAnchor = true;
+                  localStorage.setItem('dsh-fast-history.settings.v1', JSON.stringify({
+                    enabled: true, prefetchPages: 0, thresholdPx: 96, preloadScreens: 1.5,
+                  }));
+                  localStorage.setItem('dsh-fast-history.debug', '1');
+                }"""
+            )
+            no_anchor_mobile.evaluate("() => window.__applyPlugin()")
+            no_anchor_mobile.wait_for_timeout(300)
+            no_anchor_mobile.evaluate(
+                """() => {
+                  const scroller = document.getElementById('scroller');
+                  scroller.scrollTop = 0;
+                  const row = document.querySelector('[data-chat-anchor-key]');
+                  const start = new Event('touchstart', { bubbles: true, cancelable: true });
+                  Object.defineProperty(start, 'touches', { value: [{ clientY: 300 }] });
+                  row.dispatchEvent(start);
+                  const move = new Event('touchmove', { bubbles: true, cancelable: true });
+                  Object.defineProperty(move, 'touches', { value: [{ clientY: 340 }] });
+                  row.dispatchEvent(move);
+                  row.dispatchEvent(new Event('touchend', { bubbles: true, cancelable: true }));
+                }"""
+            )
+            no_anchor_mobile.wait_for_timeout(1000)
+            na_mobile_stats = no_anchor_mobile.evaluate(
+                "() => window.__DSH_FAST_HISTORY__.stats()"
+            )
+            na_mobile_count = no_anchor_mobile.evaluate("() => window.__loadCount || 0")
+            na_mobile_pager = no_anchor_mobile.evaluate("() => window.__pagerClicks || 0")
+            na_mobile_scroll = no_anchor_mobile.evaluate(
+                "() => document.getElementById('scroller').scrollTop"
+            )
+            print(
+                "no-anchor mobile top:",
+                na_mobile_count,
+                "pager:",
+                na_mobile_pager,
+                "scrollTop:",
+                na_mobile_scroll,
+                json.dumps(na_mobile_stats, ensure_ascii=False),
+            )
+            assert na_mobile_count == 1, f"expected one top page, got {na_mobile_count}"
+            assert na_mobile_pager == 0, na_mobile_pager
+            assert na_mobile_scroll > 4, f"old top row was not held: {na_mobile_scroll}"
+            assert na_mobile_stats["lastDriftPx"] is None or abs(
+                na_mobile_stats["lastDriftPx"]
+            ) < 2, na_mobile_stats
+            assert na_mobile_stats["chainLoads"] == 0, na_mobile_stats
+
+            # 5f. dsh-mobile style synthetic pager click. Its 64 px gate calls
+            #     button.click(); the plugin must swallow that untrusted click
+            #     and use the anchored direct path instead of beginPaging.
+            synthetic = browser.new_page(
+                viewport={"width": 390, "height": 760},
+                has_touch=True,
+                is_mobile=True,
+            )
+            synthetic.on(
+                "pageerror",
+                lambda error: errors.append(f"synthetic pager pageerror: {error}"),
+            )
+            synthetic.goto(f"{base}/test/fixture.html")
+            synthetic.add_script_tag(path=str(ROOT / "client.js"))
+            synthetic.evaluate(
+                """() => {
+                  window.__noAnchor = true;
+                  localStorage.setItem('dsh-fast-history.settings.v1', JSON.stringify({
+                    enabled: true, prefetchPages: 0, thresholdPx: 96, preloadScreens: 1.5,
+                  }));
+                  localStorage.setItem('dsh-fast-history.debug', '1');
+                }"""
+            )
+            synthetic.evaluate("() => window.__applyPlugin()")
+            synthetic.wait_for_timeout(300)
+            synthetic.evaluate(
+                """() => {
+                  document.getElementById('scroller').scrollTop = 0;
+                  document.getElementById('pager').click();
+                }"""
+            )
+            synthetic.wait_for_timeout(900)
+            synthetic_stats = synthetic.evaluate(
+                "() => window.__DSH_FAST_HISTORY__.stats()"
+            )
+            synthetic_count = synthetic.evaluate("() => window.__loadCount || 0")
+            synthetic_pager = synthetic.evaluate("() => window.__pagerClicks || 0")
+            synthetic_scroll = synthetic.evaluate(
+                "() => document.getElementById('scroller').scrollTop"
+            )
+            print(
+                "synthetic pager:",
+                synthetic_count,
+                "pager:",
+                synthetic_pager,
+                "scrollTop:",
+                synthetic_scroll,
+                json.dumps(synthetic_stats, ensure_ascii=False),
+            )
+            assert synthetic_count == 1, f"synthetic click should load one page, got {synthetic_count}"
+            assert synthetic_pager == 0, f"synthetic click must be intercepted, got {synthetic_pager}"
+            assert synthetic_scroll > 4, f"synthetic click anchor failed: {synthetic_scroll}"
+            assert synthetic_stats["lastDriftPx"] is None or abs(
+                synthetic_stats["lastDriftPx"]
+            ) < 2, synthetic_stats
+            assert synthetic_stats["chainLoads"] == 0, synthetic_stats
+
             # 6. Desktop top click still uses the official pager (the mobile
             #    suppression above must not disable the anchored path on web).
             top = browser.new_page(viewport={"width": 900, "height": 700})
@@ -431,13 +557,9 @@ def main() -> None:
             tpager = top.evaluate("() => window.__pagerClicks || 0")
             print("desktop top pager:", tcount, "pager:", tpager, json.dumps(tstats, ensure_ascii=False))
             assert tpager == 1, f"desktop top should click the official pager, got {tpager}"
-            # The official pager anchors the old top at 360px; with a 1-screen
-            # lead (400px) the anchored head is still inside the lead, so one
-            # chain page is legitimate.  What matters is that the pager is used
-            # and the chain stays bounded (no loop).
-            assert 2 <= tcount <= 3, f"desktop top pager expected 2-3 pages, got {tcount}"
-            assert tstats["autoLoads"] >= 1, tstats
-            assert tstats["chainLoads"] <= 1, tstats
+            assert tcount == 2, f"desktop top pager should add exactly one page, got {tcount}"
+            assert tstats["autoLoads"] == 1, tstats
+            assert tstats["chainLoads"] == 0, f"explicit top pull must not chain, got {tstats['chainLoads']}"
 
             # 7. Keyboard on body, resync re-arm, aria-hidden rebind, and
             #    top pager without a working anchor.
