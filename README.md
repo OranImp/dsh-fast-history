@@ -52,7 +52,7 @@ dsh plugin --profile web add dsh-fast-history
 Refresh the Web GUI after installation (the client bundle is not HMR’d when `pnpm run dev:web` is not running).
 
 Manual install: add
-`"dsh-fast-history": "link:/absolute/path/to/dsh-fast-history"` to the profile dependencies, append `"dsh-fast-history"` to `dsh.profile.bundles`, run `npm install`, and refresh.
+`"dsh-fast-history": "link:/absolute/path/to/dsh-fast-history"` to the profile dependencies, append `"dsh-fast-history"` to `dsh.profile.bundles`, run `pnpm install`, and refresh.
 
 ### Settings
 
@@ -86,6 +86,8 @@ window.__DSH_FAST_HISTORY__.setSettings({ prefetchPages: 0, preloadScreens: 2 })
 
 ### Tests
 
+From a checkout (tests are not included in the npm tarball):
+
 ```bash
 node --test test/*.test.mjs
 # optional Chromium fixture; requires Playwright + a Chromium build
@@ -118,7 +120,7 @@ session the tool call is `plugin_manager action=remove_bundle target="dsh-fast-h
 
 1. **首屏**：不改变官方尾部优先策略，不增加首屏请求。
 2. **预取**：首屏稳定且会话空闲时，后台直接调用 `SessionFace.loadOlder()` 预读 1 页（可配置 0/1/2），让第一次上滑通常无需等待。
-3. **提前自动加载**：用 wheel / touch / 键盘输入方向门控；在距离已加载头部还有 **1.5 屏**（可设 1/1.5/2 屏）时就开始加载，而不是等只能靠点「加载更早」继续。提前加载使用 `loadOlder()` 直接请求，避免在 pager 不在视口时调用官方 `beginPaging` 造成跳动；真正滚到顶部（≤4px）且手指已抬起时，桌面端和移动端都走官方 pager 点击，让 Chat 的 `beginPaging` 保留阅读锚点；提前加载仍用 `loadOlder()` 直连。移动端之前不在顶部点 pager，导致顶部直接 prepend 后视口留在顶部、按钮跳到下一页；0.2.3 修正了这一点。
+3. **提前自动加载**：用 wheel / touch / 键盘输入方向门控；在距离已加载头部还有 **1.5 屏**（可设 1/1.5/2 屏）时就开始加载，而不是等只能靠点「加载更早」继续。提前加载使用 `loadOlder()` 直接请求，避免在 pager 不在视口时调用官方 `beginPaging` 造成跳动；真正滚到顶部（≤4px）且手指已抬起时，桌面端和移动端都走官方 pager 点击，让 Chat 的 `beginPaging` 保留阅读锚点；提前加载仍用 `loadOlder()` 直连。移动端之前不在顶部点 pager，导致顶部直接 prepend 后视口留在顶部、按钮跳到下一页；0.2.3 起修正了这一点。
 4. **连续补页**：如果一页内容不足以填满提前量，插件会在页与页之间自动续加载，一次接近最多 4 页（含第一次），直到头部离开提前区或历史耗尽，让上滑过程尽量不出现按钮/加载态。
 5. **内存**：只保留标量状态、官方对象引用和 DOM 引用；不复制历史事件，不预读整条历史，预取和续加载都有页数/条数预算。
 
@@ -145,7 +147,7 @@ dsh plugin --profile web add dsh-fast-history
 1. 在 profile 的 `package.json` dependencies 中增加
    `"dsh-fast-history": "link:/absolute/path/to/dsh-fast-history"`。
 2. 在 `dsh.profile.bundles` 末尾增加 `"dsh-fast-history"`。
-3. 在 profile 目录执行 `npm install`，刷新页面。
+3. 在 profile 目录执行 `pnpm install`，刷新页面。
 
 ### 设置
 
@@ -191,6 +193,8 @@ window.__DSH_FAST_HISTORY__.setSettings({ prefetchPages: 0, preloadScreens: 2 })
 
 ### 测试
 
+从源码 checkout 运行（npm tarball 不含 test/）：
+
 ```bash
 node --test test/*.test.mjs
 # 可选：真实 Chromium fixture（需要 Playwright + Chromium）
@@ -199,7 +203,7 @@ python3 test/browser_test.py
 # CHROMIUM_PATH=/path/to/chrome python3 test/browser_test.py
 ```
 
-浏览器 fixture 覆盖：预取 1 页、pager 仍在视口外时提前加载、提前区内自动续加载一页、官方 pager 手动仍可用、清理后不再自动加载、调试全局删除、dsh-mobile overlay 的手机上下文、无 overlay 的普通手机浏览器、快速滑动停稳前后不提前加载、无页面错误。
+浏览器 fixture 覆盖：预取 1 页、pager 仍在视口外时提前加载、提前区内自动续加载一页、官方 pager 手动仍可用、清理后不再自动加载、调试全局删除、dsh-mobile overlay 的手机上下文、无 overlay 的普通手机浏览器、快速滑动停稳前后不提前加载、body 焦点键盘 PageUp、resync 后重新预取、同会话 aria-hidden 重绑不重复预取、顶部无锚点时只点一次 pager 不续链、无页面错误。
 
 ### 卸载
 

@@ -130,21 +130,21 @@ def main() -> None:
             assert stats()["lastDriftPx"] is None or abs(stats()["lastDriftPx"]) < 2, stats()
             assert page.evaluate("() => document.getElementById('scroller').scrollTop") > 0
 
-            # 2. Chain: widen the lead to 3 screens (1200px). One page is 360px,
+            # 2. Chain: widen the lead to 2 screens (800px). One page is 360px,
             #    so after the first page the head is still within the margin and
             #    the plugin should load a second page without waiting for the top.
             page.evaluate(
-                "() => window.__DSH_FAST_HISTORY__.setSettings({ preloadScreens: 3 })"
+                "() => window.__DSH_FAST_HISTORY__.setSettings({ preloadScreens: 2 })"
             )
             page.wait_for_timeout(100)
-            set_scroll(500)
+            set_scroll(300)
             arm_wheel()
             page.wait_for_timeout(1200)
             print("after chain:", count(), json.dumps(stats(), ensure_ascii=False))
             assert count() == 4, f"expected initial + one chain page, got {count()}"
             assert stats()["chainLoads"] >= 1, stats()
             assert stats()["chainCount"] >= 2, stats()
-            assert stats()["autoMarginPx"] == 1200, stats()
+            assert stats()["autoMarginPx"] == 800, stats()
 
             # 3. The official pager still works (manual path), offscreen here.
             page.evaluate("() => document.getElementById('pager').click()")
@@ -409,7 +409,7 @@ def main() -> None:
             top.evaluate(
                 """() => {
                   localStorage.setItem('dsh-fast-history.settings.v1', JSON.stringify({
-                    enabled: true, prefetchPages: 1, thresholdPx: 96, preloadScreens: 0.5,
+                    enabled: true, prefetchPages: 1, thresholdPx: 96, preloadScreens: 1,
                   }));
                   localStorage.setItem('dsh-fast-history.debug', '1');
                 }"""
@@ -431,8 +431,119 @@ def main() -> None:
             tpager = top.evaluate("() => window.__pagerClicks || 0")
             print("desktop top pager:", tcount, "pager:", tpager, json.dumps(tstats, ensure_ascii=False))
             assert tpager == 1, f"desktop top should click the official pager, got {tpager}"
-            assert tcount == 2, f"desktop top pager load should add one page, got {tcount}"
-            assert tstats["autoLoads"] == 1, tstats
+            # The official pager anchors the old top at 360px; with a 1-screen
+            # lead (400px) the anchored head is still inside the lead, so one
+            # chain page is legitimate.  What matters is that the pager is used
+            # and the chain stays bounded (no loop).
+            assert 2 <= tcount <= 3, f"desktop top pager expected 2-3 pages, got {tcount}"
+            assert tstats["autoLoads"] >= 1, tstats
+            assert tstats["chainLoads"] <= 1, tstats
+
+            # 7. Keyboard on body, resync re-arm, aria-hidden rebind, and
+            #    top pager without a working anchor.
+            keyboard = browser.new_page(viewport={"width": 900, "height": 700})
+            keyboard.on("pageerror", lambda error: errors.append(f"keyboard pageerror: {error}"))
+            keyboard.goto(f"{base}/test/fixture.html")
+            keyboard.add_script_tag(path=str(ROOT / "client.js"))
+            keyboard.evaluate(
+                """() => {
+                  localStorage.setItem('dsh-fast-history.settings.v1', JSON.stringify({
+                    enabled: true, prefetchPages: 0, thresholdPx: 96, preloadScreens: 1.5,
+                  }));
+                  localStorage.setItem('dsh-fast-history.debug', '1');
+                }"""
+            )
+            keyboard.evaluate("() => window.__applyPlugin()")
+            keyboard.wait_for_timeout(300)
+            keyboard.evaluate("() => { document.getElementById('scroller').scrollTop = 500; }")
+            keyboard.wait_for_timeout(120)
+            keyboard.evaluate(
+                """() => document.body.dispatchEvent(new KeyboardEvent('keydown', {
+                  key: 'PageUp', bubbles: true, cancelable: true,
+                }))"""
+            )
+            keyboard.wait_for_timeout(900)
+            keyboard_count = keyboard.evaluate("() => window.__loadCount || 0")
+            keyboard_stats = keyboard.evaluate("() => window.__DSH_FAST_HISTORY__.stats()")
+            print("keyboard body:", keyboard_count, json.dumps(keyboard_stats, ensure_ascii=False))
+            assert keyboard_count >= 1, f"body-focused PageUp should load, got {keyboard_count}"
+            assert keyboard.evaluate("() => window.__pagerClicks || 0") == 0
+
+            resync = browser.new_page(viewport={"width": 900, "height": 700})
+            resync.on("pageerror", lambda error: errors.append(f"resync pageerror: {error}"))
+            resync.goto(f"{base}/test/fixture.html")
+            resync.add_script_tag(path=str(ROOT / "client.js"))
+            resync.evaluate(
+                """() => {
+                  localStorage.setItem('dsh-fast-history.settings.v1', JSON.stringify({
+                    enabled: true, prefetchPages: 1, thresholdPx: 96, preloadScreens: 1.5,
+                  }));
+                  localStorage.setItem('dsh-fast-history.debug', '1');
+                }"""
+            )
+            resync.evaluate("() => window.__applyPlugin()")
+            resync.wait_for_timeout(1800)
+            before_resync = resync.evaluate("() => window.__loadCount || 0")
+            assert before_resync == 1, before_resync
+            resync.evaluate("() => window.__fixture.resync()")
+            resync.wait_for_timeout(2600)
+            after_resync = resync.evaluate("() => window.__loadCount || 0")
+            resync_stats = resync.evaluate("() => window.__DSH_FAST_HISTORY__.stats()")
+            print("resync re-arm:", after_resync, json.dumps(resync_stats, ensure_ascii=False))
+            assert after_resync == 2, f"resync should re-arm prefetch, got {after_resync}"
+
+            resync.evaluate(
+                """() => {
+                  const root = document.getElementById('conversation');
+                  const wrap = document.createElement('div');
+                  wrap.id = 'panel-wrap';
+                  wrap.setAttribute('aria-hidden', 'true');
+                  root.parentNode.insertBefore(wrap, root);
+                  wrap.appendChild(root);
+                }"""
+            )
+            resync.wait_for_timeout(300)
+            resync.evaluate(
+                """() => {
+                  const wrap = document.getElementById('panel-wrap');
+                  const root = document.getElementById('conversation');
+                  wrap.parentNode.insertBefore(root, wrap);
+                  wrap.remove();
+                }"""
+            )
+            resync.wait_for_timeout(1900)
+            after_rebind = resync.evaluate("() => window.__loadCount || 0")
+            print("after aria-hidden rebind:", after_rebind)
+            assert after_rebind == 2, f"same-session rebind must not re-prefetch, got {after_rebind}"
+
+            no_anchor = browser.new_page(viewport={"width": 900, "height": 700})
+            no_anchor.on("pageerror", lambda error: errors.append(f"no-anchor pageerror: {error}"))
+            no_anchor.goto(f"{base}/test/fixture.html")
+            no_anchor.add_script_tag(path=str(ROOT / "client.js"))
+            no_anchor.evaluate(
+                """() => {
+                  window.__noAnchor = true;
+                  localStorage.setItem('dsh-fast-history.settings.v1', JSON.stringify({
+                    enabled: true, prefetchPages: 0, thresholdPx: 96, preloadScreens: 1.5,
+                  }));
+                  localStorage.setItem('dsh-fast-history.debug', '1');
+                }"""
+            )
+            no_anchor.evaluate("() => window.__applyPlugin()")
+            no_anchor.wait_for_timeout(300)
+            no_anchor.evaluate("() => { document.getElementById('scroller').scrollTop = 0; }")
+            nb = no_anchor.locator("#scroller").bounding_box()
+            assert nb is not None
+            no_anchor.mouse.move(nb["x"] + nb["width"] / 2, nb["y"] + nb["height"] / 2)
+            no_anchor.mouse.wheel(0, -10)
+            no_anchor.wait_for_timeout(900)
+            na_stats = no_anchor.evaluate("() => window.__DSH_FAST_HISTORY__.stats()")
+            na_count = no_anchor.evaluate("() => window.__loadCount || 0")
+            na_pager = no_anchor.evaluate("() => window.__pagerClicks || 0")
+            print("no-anchor top:", na_count, "pager:", na_pager, json.dumps(na_stats, ensure_ascii=False))
+            assert na_pager == 1, f"top should use the pager once, got {na_pager}"
+            assert na_count == 1, f"no-anchor top must not chain, got {na_count}"
+            assert na_stats["chainCount"] == 1, na_stats
 
             browser.close()
     finally:

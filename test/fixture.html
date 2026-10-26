@@ -101,7 +101,7 @@
               row.textContent = `older row ${prepended}`;
               rows.insertBefore(row, rows.firstChild);
             }
-            restoreTopRow(anchor);
+            if (!window.__noAnchor) restoreTopRow(anchor);
             state.entries += 3;
             state.revision += 1;
             state.loadingOlder = false;
@@ -129,7 +129,17 @@
       };
       const binding = { session, eventSource };
       window.__sessions = { s1: binding };
-      window.__fixture = { state, binding, loadOlder, subscribers };
+      window.__fixture = {
+        state,
+        binding,
+        loadOlder,
+        subscribers,
+        resync() {
+          state.entries = 10;
+          state.revision += 1;
+          notify();
+        },
+      };
       window.__loadCount = 0;
       window.__pagerClicks = 0;
       document.getElementById('pager').addEventListener('click', () => {

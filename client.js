@@ -104,14 +104,14 @@ window.__ModuleLoader__.load({
       const src = raw && typeof raw === 'object' ? raw : {};
       const enabled = normalizeEnabled(src.enabled);
       let prefetchPages = Number(src.prefetchPages);
-      if (!Number.isFinite(prefetchPages)) prefetchPages = DEFAULTS.prefetchPages;
+      if (src.prefetchPages === null || !Number.isFinite(prefetchPages)) prefetchPages = DEFAULTS.prefetchPages;
       prefetchPages = Math.max(0, Math.min(2, Math.trunc(prefetchPages)));
       let thresholdPx = Number(src.thresholdPx);
-      if (!Number.isFinite(thresholdPx)) thresholdPx = DEFAULTS.thresholdPx;
+      if (src.thresholdPx === null || !Number.isFinite(thresholdPx)) thresholdPx = DEFAULTS.thresholdPx;
       thresholdPx = Math.max(32, Math.min(400, Math.trunc(thresholdPx)));
       let preloadScreens = Number(src.preloadScreens);
-      if (!Number.isFinite(preloadScreens)) preloadScreens = DEFAULTS.preloadScreens;
-      preloadScreens = Math.round(Math.max(0.5, Math.min(3, preloadScreens)) * 2) / 2;
+      if (src.preloadScreens === null || !Number.isFinite(preloadScreens)) preloadScreens = DEFAULTS.preloadScreens;
+      preloadScreens = Math.round(Math.max(1, Math.min(2, preloadScreens)) * 2) / 2;
       return { enabled, prefetchPages, thresholdPx, preloadScreens };
     }
 
@@ -411,7 +411,7 @@ window.__ModuleLoader__.load({
         this.value = normalizeSettings(readJson(SETTINGS_KEY));
         this.listeners = new Set();
         this.onStorage = (event) => {
-          if (!event || event.key !== SETTINGS_KEY) return;
+          if (!event || (event.key !== SETTINGS_KEY && event.key !== null)) return;
           this.value = normalizeSettings(readJson(SETTINGS_KEY));
           this.emit();
         };
@@ -519,6 +519,9 @@ window.__ModuleLoader__.load({
         this.prefetchedPages = 0;
         this.prefetchedEntries = 0;
         this.prefetchStopped = false;
+        this.lastWindowEntries = null;
+        this.wasOpen = false;
+        this.carriedPrefetch = null;
 
         this.stats = {
           sessionId: null,
@@ -569,7 +572,7 @@ window.__ModuleLoader__.load({
         this.onWheel = (event) => this.handleWheel(event);
         this.onTouchStart = (event) => this.handleTouchStart(event);
         this.onTouchMove = (event) => this.handleTouchMove(event);
-        this.onTouchEnd = () => this.handleTouchEnd();
+        this.onTouchEnd = (event) => this.handleTouchEnd(event);
         this.onTouchCancel = () => this.handleTouchCancel();
         this.onScrollEnd = () => this.handleScrollEnd();
         this.onKeyDown = (event) => this.handleKeyDown(event);
@@ -765,6 +768,22 @@ window.__ModuleLoader__.load({
         this.sessionId = found.sessionId;
         this.lastTop = Number(this.scroller.scrollTop) || 0;
         this.bindRetries = 0;
+        const carried = this.carriedPrefetch;
+        this.carriedPrefetch = null;
+        if (carried && carried.sessionId === found.sessionId) {
+          // Keep the prefetch ledger across a pure visibility/remount rebind
+          // of the same session; the window may still be the same. A window
+          // shrink is detected in onSession and resets it.
+          this.prefetchedPages = carried.prefetchedPages;
+          this.prefetchedEntries = carried.prefetchedEntries;
+          this.prefetchStopped = carried.prefetchStopped;
+          this.openEntries = carried.openEntries;
+          this.lastWindowEntries = carried.lastWindowEntries;
+          this.wasOpen = true;
+          this.stats.openEntries = carried.openEntries;
+          this.stats.prefetchedPages = carried.prefetchedPages;
+          this.stats.prefetchedEntries = carried.prefetchedEntries;
+        }
         this.resolveBinding();
       }
 
@@ -807,6 +826,16 @@ window.__ModuleLoader__.load({
 
       teardownBinding() {
         this.generation += 1;
+        if (this.sessionId !== null && this.session) {
+          this.carriedPrefetch = {
+            sessionId: this.sessionId,
+            prefetchedPages: this.prefetchedPages,
+            prefetchedEntries: this.prefetchedEntries,
+            prefetchStopped: this.prefetchStopped,
+            openEntries: this.openEntries,
+            lastWindowEntries: this.lastWindowEntries,
+          };
+        }
         if (this.unsubscribeSession) {
           try {
             this.unsubscribeSession();
@@ -831,10 +860,15 @@ window.__ModuleLoader__.load({
         this.armed = false;
         this.armedKind = null;
         this.touch = null;
+        this.lastLoadAt = 0;
+        this.failureUntil = 0;
+        this.lastScrollAt = 0;
         this.openEntries = null;
         this.prefetchedPages = 0;
         this.prefetchedEntries = 0;
         this.prefetchStopped = false;
+        this.lastWindowEntries = null;
+        this.wasOpen = false;
         this.stats.openEntries = null;
         this.stats.prefetchedPages = 0;
         this.stats.prefetchedEntries = 0;
@@ -904,6 +938,13 @@ window.__ModuleLoader__.load({
           this.sync();
           return;
         }
+        const entries = this.entriesCount();
+        const openNow = snapshot.openState === 'open';
+        const reopened = openNow && !this.wasOpen;
+        const shrank = this.lastWindowEntries !== null && entries < this.lastWindowEntries;
+        if (reopened || shrank) this.resetPrefetchWindow(entries);
+        this.lastWindowEntries = entries;
+        this.wasOpen = openNow;
         if (snapshot.openState === 'open' && this.openEntries === null) {
           this.openEntries = this.entriesCount();
           this.stats.openEntries = this.openEntries;
@@ -1038,6 +1079,20 @@ window.__ModuleLoader__.load({
         this.fastScrolling = false;
         this.scrollVelocity = 0;
         this.pendingLoadAfterSettle = false;
+      }
+
+      resetPrefetchWindow(entries) {
+        this.cancelPrefetch();
+        this.prefetchedPages = 0;
+        this.prefetchedEntries = 0;
+        this.prefetchStopped = !openWindowAllowed(entries);
+        this.openEntries = entries;
+        this.stats.openEntries = entries;
+        this.stats.prefetchedPages = 0;
+        this.stats.prefetchedEntries = 0;
+        if (this.prefetchStopped) {
+          this.debugLog('skip prefetch: initial window is heavy', entries);
+        }
       }
 
       prefetchDue() {
@@ -1491,8 +1546,7 @@ window.__ModuleLoader__.load({
           const margin = this.autoMargin();
           this.stats.autoMarginPx = Math.round(margin);
           const top = this.scroller ? Number(this.scroller.scrollTop) || 0 : Number.POSITIVE_INFINITY;
-          const stuckAtTop = top <= PAGER_CLICK_MAX_PX
-            && (info.used === 'direct' || kind === 'chain');
+          const stuckAtTop = top <= PAGER_CLICK_MAX_PX;
           const canContinue = status === 'settled'
             && this.snapshot
             && this.snapshot.hasMore
@@ -1500,7 +1554,7 @@ window.__ModuleLoader__.load({
             && top <= margin
             && !stuckAtTop
             && now() >= this.failureUntil;
-          if (stuckAtTop) this.debugLog('direct load left the viewport at the top; stop chain');
+          if (stuckAtTop) this.debugLog('page load left the viewport at the top; stop chain');
           if (canContinue) {
             this.chainActive = true;
             this.scheduleChain();
@@ -1695,7 +1749,8 @@ window.__ModuleLoader__.load({
         this.touch.lastY = touch.clientY;
       }
 
-      handleTouchEnd() {
+      handleTouchEnd(event) {
+        if (event && event.touches && event.touches.length > 0) return;
         const info = this.touch;
         this.touch = null;
         if (!info || this.disposed || !this.scroller || !this.settings.enabled) return;
@@ -1735,12 +1790,18 @@ window.__ModuleLoader__.load({
 
       handleKeyDown(event) {
         if (this.disposed || !this.settings.enabled) return;
+        if (event.defaultPrevented) return;
         if (event.repeat) return;
         if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
         if (event.key !== 'ArrowUp' && event.key !== 'PageUp' && event.key !== 'Home') return;
         if (isEditable(event.target)) return;
         if (nearestNestedScroller(event.target, this.scroller, window)) return;
-        if (!this.rootEl || !this.rootEl.contains(event.target)) return;
+        if (!this.rootEl) return;
+        const inRoot = this.rootEl.contains(event.target);
+        const documentTarget = event.target === document.body
+          || event.target === document.documentElement
+          || event.target === document;
+        if (!inRoot && !documentTarget) return;
         this.arm('key');
         if (this.scroller && Number(this.scroller.scrollTop) <= this.autoMargin()) {
           this.requestLoad('gesture');

@@ -126,6 +126,16 @@ test('module metadata and defaults', () => {
     preloadScreens: 1.5,
   });
   assert.deepEqual({ ...module.__internals.normalizeSettings({
+    prefetchPages: null,
+    thresholdPx: null,
+    preloadScreens: null,
+  }) }, {
+    enabled: true,
+    prefetchPages: 1,
+    thresholdPx: 96,
+    preloadScreens: 1.5,
+  });
+  assert.deepEqual({ ...module.__internals.normalizeSettings({
     enabled: false,
     prefetchPages: 99,
     thresholdPx: 1,
@@ -134,7 +144,7 @@ test('module metadata and defaults', () => {
     enabled: false,
     prefetchPages: 2,
     thresholdPx: 32,
-    preloadScreens: 3,
+    preloadScreens: 2,
   });
   assert.equal(module.__internals.normalizeSettings({ enabled: 'false' }).enabled, false);
   assert.equal(module.__internals.normalizeSettings({ enabled: '0' }).enabled, false);
@@ -231,7 +241,7 @@ test('SettingsStore persists, clamps and notifies', () => {
   const unsubscribe = store.subscribe((value) => seen.push(value));
   assert.deepEqual({ ...store.get() }, { enabled: true, prefetchPages: 1, thresholdPx: 96, preloadScreens: 1.5 });
   store.update({ prefetchPages: 9, thresholdPx: 1, preloadScreens: 99 });
-  assert.deepEqual({ ...store.get() }, { enabled: true, prefetchPages: 2, thresholdPx: 32, preloadScreens: 3 });
+  assert.deepEqual({ ...store.get() }, { enabled: true, prefetchPages: 2, thresholdPx: 32, preloadScreens: 2 });
   assert.equal(seen.length, 1);
   assert.equal(
     JSON.parse(storage.get('dsh-fast-history.settings.v1')).prefetchPages,
@@ -240,8 +250,16 @@ test('SettingsStore persists, clamps and notifies', () => {
   unsubscribe();
   store.update({ enabled: false });
   assert.equal(seen.length, 1);
+  storage.clear();
+  store.onStorage({ key: null });
+  assert.deepEqual({ ...store.get() }, {
+    enabled: true,
+    prefetchPages: 1,
+    thresholdPx: 96,
+    preloadScreens: 1.5,
+  });
   store.dispose();
-  assert.equal(window.localStorage.getItem('dsh-fast-history.settings.v1') !== null, true);
+  assert.equal(window.localStorage.getItem('dsh-fast-history.settings.v1'), null);
 });
 
 test('settings row renders without the real slot runtime', () => {
