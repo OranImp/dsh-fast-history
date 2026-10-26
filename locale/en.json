@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "title": "History loading",
+    "description": "Mobile-first progressive history loading for DSH Web; display only."
+  },
+  "title": "History loading",
+  "description": "Automatically loads older messages when you scroll up, and prefetches a little history after a session opens. Display only; the model context is unchanged.",
+  "prefetch": "Prefetch pages",
+  "off": "Off",
+  "onePage": "1 page",
+  "twoPages": "2 pages",
+  "enabled": "Auto-load is on",
+  "disabled": "Auto-load is off",
+  "toggle": "Enable automatic history loading",
+  "lead": "Lead",
+  "oneScreen": "1 screen",
+  "oneAndHalfScreens": "1.5 screens",
+  "twoScreens": "2 screens"
+}

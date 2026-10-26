@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <link rel="icon" href="data:,">
+  <title>dsh-fast-history fixture</title>
+  <style>
+    html, body { margin: 0; padding: 0; }
+    #conversation { width: 640px; }
+    #scroller { height: 400px; overflow-y: auto; border: 1px solid #ccc; }
+    [data-chat-flow] { display: flex; flex-direction: column; }
+    [data-slot="conversation.chat.flow"] { display: flex; flex-direction: column; }
+    .EvIC1a_older { display: flex; justify-content: center; padding: 8px; }
+    .row { height: 120px; box-sizing: border-box; border-bottom: 1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <div id="conversation" data-conversation-session="s1">
+    <div id="scroller" data-conversation-scroll="">
+      <div id="chat-root" data-chat-following-tail="">
+        <div data-chat-flow="">
+          <div class="EvIC1a_older"><button id="pager" type="button">加载更早</button></div>
+          <div data-slot="conversation.chat.flow" id="rows">
+            <div class="row" data-chat-anchor-key="row-1">row 1</div>
+            <div class="row" data-chat-anchor-key="row-2">row 2</div>
+            <div class="row" data-chat-anchor-key="row-3">row 3</div>
+            <div class="row" data-chat-anchor-key="row-4">row 4</div>
+            <div class="row" data-chat-anchor-key="row-5">row 5</div>
+            <div class="row" data-chat-anchor-key="row-6">row 6</div>
+            <div class="row" data-chat-anchor-key="row-7">row 7</div>
+            <div class="row" data-chat-anchor-key="row-8">row 8</div>
+            <div class="row" data-chat-anchor-key="row-9">row 9</div>
+            <div class="row" data-chat-anchor-key="row-10">row 10</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    window.__ModuleLoader__ = {
+      load(definition) {
+        window.__pluginDef = definition;
+      },
+    };
+    window.__ReactStub = {
+      createElement: () => null,
+      useState: (value) => [value, () => {}],
+      useEffect: () => {},
+    };
+
+    (() => {
+      const state = {
+        openState: 'open',
+        hasMore: true,
+        loadingOlder: false,
+        running: false,
+        removed: false,
+        entries: 10,
+        revision: 1,
+      };
+      const subscribers = new Set();
+      const notify = () => {
+        for (const fn of Array.from(subscribers)) fn();
+      };
+      let prepended = 0;
+      const captureTopRow = () => {
+        const scroller = document.getElementById('scroller');
+        const top = scroller.getBoundingClientRect().top;
+        for (const row of document.querySelectorAll('[data-chat-anchor-key]')) {
+          const rect = row.getBoundingClientRect();
+          if (rect.height > 0 && rect.bottom > top + 1) {
+            return { key: row.dataset.chatAnchorKey, top: rect.top };
+          }
+        }
+        return null;
+      };
+      const restoreTopRow = (position) => {
+        if (!position) return;
+        const scroller = document.getElementById('scroller');
+        for (const row of document.querySelectorAll('[data-chat-anchor-key]')) {
+          if (row.dataset.chatAnchorKey !== position.key) continue;
+          const drift = row.getBoundingClientRect().top - position.top;
+          if (Math.abs(drift) > 0.5) scroller.scrollTop += drift;
+          return;
+        }
+      };
+      const loadOlder = () => {
+        if (state.loadingOlder || !state.hasMore) return Promise.resolve();
+        state.loadingOlder = true;
+        notify();
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            const anchor = captureTopRow();
+            const rows = document.getElementById('rows');
+            for (let i = 0; i < 3; i += 1) {
+              prepended += 1;
+              const row = document.createElement('div');
+              row.className = 'row';
+              row.dataset.chatAnchorKey = `pre-${prepended}`;
+              row.textContent = `older row ${prepended}`;
+              rows.insertBefore(row, rows.firstChild);
+            }
+            restoreTopRow(anchor);
+            state.entries += 3;
+            state.revision += 1;
+            state.loadingOlder = false;
+            window.__loadCount = (window.__loadCount || 0) + 1;
+            notify();
+            resolve();
+          }, 50);
+        });
+      };
+      const session = {
+        getSnapshot: () => ({ ...state }),
+        subscribe: (fn) => {
+          subscribers.add(fn);
+          return () => subscribers.delete(fn);
+        },
+        loadOlder,
+      };
+      const eventSource = {
+        getSnapshot: () => ({
+          entries: new Array(state.entries).fill(null),
+          hasMore: state.hasMore,
+          revision: state.revision,
+          change: { kind: 'replace', entries: [] },
+        }),
+      };
+      const binding = { session, eventSource };
+      window.__sessions = { s1: binding };
+      window.__fixture = { state, binding, loadOlder, subscribers };
+      window.__loadCount = 0;
+      window.__pagerClicks = 0;
+      document.getElementById('pager').addEventListener('click', () => {
+        window.__pagerClicks += 1;
+        loadOlder();
+      });
+
+      const scroller = document.getElementById('scroller');
+      const chatRoot = document.getElementById('chat-root');
+      scroller.scrollTop = scroller.scrollHeight;
+      scroller.addEventListener('scroll', () => {
+        const bottom = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
+        if (bottom <= 4) {
+          chatRoot.setAttribute('data-chat-following-tail', '');
+        } else {
+          chatRoot.removeAttribute('data-chat-following-tail');
+        }
+      });
+
+      window.__applyPlugin = () => {
+        const def = window.__pluginDef;
+        if (!def) throw new Error('plugin definition missing');
+        const mod = def.factory((name) => {
+          if (name === 'react') return window.__ReactStub;
+          throw new Error(`unexpected require ${name}`);
+        });
+        const cleanups = [];
+        const ctx = {
+          sessions: {
+            binding: (id) => window.__sessions[id],
+          },
+          slots: {
+            inject: () => () => {},
+            register: () => () => {},
+          },
+          locale: {
+            register: () => () => {},
+          },
+          effect: (fn) => {
+            const dispose = fn();
+            if (typeof dispose === 'function') cleanups.push(dispose);
+            return dispose;
+          },
+        };
+        window.__cleanup = () => {
+          for (const dispose of cleanups.reverse()) {
+            try {
+              dispose();
+            } catch (error) {
+              console.error(error);
+            }
+          }
+        };
+        window.__mod = mod;
+        mod.apply(ctx);
+      };
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "title": "历史消息加载",
+    "description": "面向手机/小屏的 DSH Web 历史消息渐进加载；只影响显示。"
+  },
+  "title": "历史消息加载",
+  "description": "向上滚动时自动加载更早的消息，并在打开会话后预读少量历史。只影响显示，不改变发送给模型的上下文。",
+  "prefetch": "预读页数",
+  "off": "关闭预读",
+  "onePage": "1 页",
+  "twoPages": "2 页",
+  "enabled": "自动加载已开启",
+  "disabled": "自动加载已关闭",
+  "toggle": "启用历史消息自动加载",
+  "lead": "提前量",
+  "oneScreen": "1 屏",
+  "oneAndHalfScreens": "1.5 屏",
+  "twoScreens": "2 屏"
+}

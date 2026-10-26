@@ -1,0 +1,57 @@
+{
+  "name": "dsh-fast-history",
+  "version": "0.2.4",
+  "description": "Mobile-first history loading for DSH Web: preserves the official tail-first first paint, bounded background prefetch, early auto-load before the Load earlier control becomes the only way to continue, and touch/fast-fling handling. Display-only; model context unchanged. 中文：面向手机/小屏的 DSH Web 历史会话渐进加载插件，沿用官方尾部优先首屏。",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "locale/*.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-settings-general"
+      ]
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OranImp/dsh-fast-history.git"
+  },
+  "homepage": "https://github.com/OranImp/dsh-fast-history#readme",
+  "bugs": {
+    "url": "https://github.com/OranImp/dsh-fast-history/issues"
+  },
+  "author": "Zichen Wu (OranImp)",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "dsh-plugin",
+    "history",
+    "chat",
+    "progressive-loading",
+    "移动端",
+    "触摸屏"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}
