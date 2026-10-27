@@ -15,5 +15,8 @@
   "lead": "提前量",
   "oneScreen": "1 屏",
   "oneAndHalfScreens": "1.5 屏",
-  "twoScreens": "2 屏"
+  "twoScreens": "2 屏",
+  "buffer": "缓冲量",
+  "threeScreens": "3 屏",
+  "fourScreens": "4 屏"
 }

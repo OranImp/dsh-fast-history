@@ -2,6 +2,8 @@
 
 [English](#english) · [中文](#中文)
 
+> **Experimental branch `experiment/mobile-seamless` (0.3.0-exp.1).** See [EXPERIMENT.md](./EXPERIMENT.md); this is not the stable 0.2.5 build.
+
 DSH Web 历史会话渐进加载插件（面向手机/小屏）：**首屏最近消息 → 后台预读少量历史 → 接近已加载头部提前补页**；支持触摸屏/移动端。只影响显示，Host 为模型组装的上下文不变。
 
 Repository: <https://github.com/OranImp/dsh-fast-history> · npm: `dsh-fast-history` (not published yet) · MIT

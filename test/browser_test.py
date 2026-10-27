@@ -110,6 +110,71 @@ def main() -> None:
             assert stats()["prefetchLoads"] == 1
             assert stats()["prefetchedPages"] == 1
 
+            # Experimental buffer: with a tall phone scrollport and a 4-screen
+            # target, keep pulling pages until the head is far enough above the
+            # viewport. This is what makes the pager disappear silently.
+            buffer_page = browser.new_page(viewport={"width": 900, "height": 700})
+            buffer_page.on("pageerror", lambda error: errors.append(f"buffer pageerror: {error}"))
+            buffer_page.goto(f"{base}/test/fixture.html")
+            buffer_page.add_style_tag(content="#scroller { height: 600px; }")
+            buffer_page.add_script_tag(path=str(ROOT / "client.js"))
+            buffer_page.evaluate(
+                """() => {
+                  localStorage.setItem('dsh-fast-history.settings.v1', JSON.stringify({
+                    enabled: true, prefetchPages: 0, thresholdPx: 96,
+                    preloadScreens: 1.5, bufferScreens: 4,
+                  }));
+                  localStorage.setItem('dsh-fast-history.debug', '1');
+                }"""
+            )
+            buffer_page.evaluate("() => window.__applyPlugin()")
+            buffer_page.wait_for_timeout(5200)
+            buffer_stats = buffer_page.evaluate(
+                "() => window.__DSH_FAST_HISTORY__.stats()"
+            )
+            buffer_diag = buffer_page.evaluate(
+                "() => window.__DSH_FAST_HISTORY__.diagnostics()"
+            )
+            buffer_count = buffer_page.evaluate("() => window.__loadCount || 0")
+            print(
+                "buffer pages:",
+                buffer_count,
+                json.dumps(buffer_stats, ensure_ascii=False),
+                json.dumps(buffer_diag, ensure_ascii=False),
+            )
+            assert buffer_count >= 3, f"buffer should load multiple pages, got {buffer_count}"
+            assert buffer_stats["bufferedPages"] >= 3, buffer_stats
+            assert buffer_diag["scrollHeight"] >= 2400, buffer_diag
+            assert buffer_diag["bufferShortfallPx"] == 0, buffer_diag
+
+            # Experimental prewarm: hovering a sidebar session row should hit
+            # the cold-safe page Remote once (the host prepares the session).
+            prewarm_page = browser.new_page(viewport={"width": 900, "height": 700})
+            prewarm_page.on("pageerror", lambda error: errors.append(f"prewarm pageerror: {error}"))
+            prewarm_page.goto(f"{base}/test/fixture.html")
+            prewarm_page.add_script_tag(path=str(ROOT / "client.js"))
+            prewarm_page.evaluate(
+                """() => {
+                  localStorage.setItem('dsh-fast-history.settings.v1', JSON.stringify({
+                    enabled: true, prefetchPages: 0, thresholdPx: 96,
+                    preloadScreens: 1.5, bufferScreens: 2, prewarm: true,
+                  }));
+                }"""
+            )
+            prewarm_page.evaluate("() => window.__applyPlugin()")
+            prewarm_page.wait_for_timeout(100)
+            prewarm_page.evaluate(
+                """() => document.getElementById('session-row').dispatchEvent(
+                  new PointerEvent('pointerover', { bubbles: true })
+                )"""
+            )
+            prewarm_page.wait_for_timeout(500)
+            prewarm_requests = prewarm_page.evaluate("() => window.__prewarmRequests")
+            print("prewarm requests:", json.dumps(prewarm_requests, ensure_ascii=False))
+            assert len(prewarm_requests) == 1, prewarm_requests
+            assert prewarm_requests[0]["address"]["sessionId"] == "warm-1", prewarm_requests
+            assert prewarm_requests[0]["maxMessages"] == 1, prewarm_requests
+
             # 1. Early load: the pager is offscreen (scrollTop 500 > 96) but the
             #    scroll position is inside the 1.5-screen lead margin (600px).
             set_scroll(500)

@@ -118,12 +118,14 @@ test('module metadata and defaults', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(HERE, '..', 'package.json'), 'utf8'));
   assert.equal(definition.id, 'dsh-fast-history');
   assert.equal(module.__internals.VERSION, pkg.version);
-  assert.deepEqual(Array.from(module.inject), ['sessions', 'slots', 'locale']);
+  assert.deepEqual(Array.from(module.inject), ['sessions', 'slots', 'locale', 'remote']);
   assert.deepEqual({ ...module.__internals.normalizeSettings({}) }, {
     enabled: true,
     prefetchPages: 1,
     thresholdPx: 96,
     preloadScreens: 1.5,
+    bufferScreens: 3,
+    prewarm: true,
   });
   assert.deepEqual({ ...module.__internals.normalizeSettings({
     prefetchPages: null,
@@ -134,17 +136,22 @@ test('module metadata and defaults', () => {
     prefetchPages: 1,
     thresholdPx: 96,
     preloadScreens: 1.5,
+    bufferScreens: 3,
+    prewarm: true,
   });
   assert.deepEqual({ ...module.__internals.normalizeSettings({
     enabled: false,
     prefetchPages: 99,
     thresholdPx: 1,
     preloadScreens: 99,
+    bufferScreens: 99,
   }) }, {
     enabled: false,
     prefetchPages: 2,
     thresholdPx: 32,
     preloadScreens: 2,
+    bufferScreens: 4,
+    prewarm: true,
   });
   assert.equal(module.__internals.normalizeSettings({ enabled: 'false' }).enabled, false);
   assert.equal(module.__internals.normalizeSettings({ enabled: '0' }).enabled, false);
@@ -239,9 +246,9 @@ test('SettingsStore persists, clamps and notifies', () => {
   const store = new SettingsStore();
   const seen = [];
   const unsubscribe = store.subscribe((value) => seen.push(value));
-  assert.deepEqual({ ...store.get() }, { enabled: true, prefetchPages: 1, thresholdPx: 96, preloadScreens: 1.5 });
+  assert.deepEqual({ ...store.get() }, { enabled: true, prefetchPages: 1, thresholdPx: 96, preloadScreens: 1.5, bufferScreens: 3, prewarm: true });
   store.update({ prefetchPages: 9, thresholdPx: 1, preloadScreens: 99 });
-  assert.deepEqual({ ...store.get() }, { enabled: true, prefetchPages: 2, thresholdPx: 32, preloadScreens: 2 });
+  assert.deepEqual({ ...store.get() }, { enabled: true, prefetchPages: 2, thresholdPx: 32, preloadScreens: 2, bufferScreens: 3, prewarm: true });
   assert.equal(seen.length, 1);
   assert.equal(
     JSON.parse(storage.get('dsh-fast-history.settings.v1')).prefetchPages,
@@ -257,6 +264,8 @@ test('SettingsStore persists, clamps and notifies', () => {
     prefetchPages: 1,
     thresholdPx: 96,
     preloadScreens: 1.5,
+    bufferScreens: 3,
+    prewarm: true,
   });
   store.dispose();
   assert.equal(window.localStorage.getItem('dsh-fast-history.settings.v1'), null);

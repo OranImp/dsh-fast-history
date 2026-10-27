@@ -18,7 +18,7 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const h = React.createElement;
 
-    const VERSION = '0.2.5';
+    const VERSION = '0.3.0-exp.1';
     const NS = 'dsh-fast-history';
     const SETTINGS_KEY = 'dsh-fast-history.settings.v1';
     const DEBUG_KEY = 'dsh-fast-history.debug';
@@ -28,6 +28,8 @@ window.__ModuleLoader__.load({
       prefetchPages: 1,
       thresholdPx: 96,
       preloadScreens: 1.5,
+      bufferScreens: 3,
+      prewarm: true,
     });
 
     const COOLDOWN_MS = 400;
@@ -48,6 +50,7 @@ window.__ModuleLoader__.load({
     const PAGER_CLICK_MAX_PX = 4;
     const CHAIN_GAP_MS = 80;
     const MAX_CHAIN_PAGES = 4;
+    const BUFFER_MAX_PAGES = 4;
     const FAST_SCROLL_VELOCITY_PX_PER_MS = 0.75;
     const FAST_SCROLL_DELTA_PX = 20;
     const SCROLL_SETTLE_MS = 140;
@@ -65,6 +68,9 @@ window.__ModuleLoader__.load({
       oneScreen: '1 屏',
       oneAndHalfScreens: '1.5 屏',
       twoScreens: '2 屏',
+      threeScreens: '3 屏',
+      fourScreens: '4 屏',
+      buffer: '缓冲量',
       enabled: '自动加载已开启',
       disabled: '自动加载已关闭',
       toggle: '启用历史消息自动加载',
@@ -81,6 +87,9 @@ window.__ModuleLoader__.load({
       oneScreen: '1 screen',
       oneAndHalfScreens: '1.5 screens',
       twoScreens: '2 screens',
+      threeScreens: '3 screens',
+      fourScreens: '4 screens',
+      buffer: 'Buffer',
       enabled: 'Auto-load is on',
       disabled: 'Auto-load is off',
       toggle: 'Enable automatic history loading',
@@ -114,7 +123,11 @@ window.__ModuleLoader__.load({
       let preloadScreens = Number(src.preloadScreens);
       if (src.preloadScreens === null || !Number.isFinite(preloadScreens)) preloadScreens = DEFAULTS.preloadScreens;
       preloadScreens = Math.round(Math.max(1, Math.min(2, preloadScreens)) * 2) / 2;
-      return { enabled, prefetchPages, thresholdPx, preloadScreens };
+      let bufferScreens = Number(src.bufferScreens);
+      if (src.bufferScreens === null || !Number.isFinite(bufferScreens)) bufferScreens = DEFAULTS.bufferScreens;
+      bufferScreens = Math.max(2, Math.min(4, Math.round(bufferScreens)));
+      const prewarm = src.prewarm === undefined || src.prewarm === null ? DEFAULTS.prewarm : normalizeEnabled(src.prewarm);
+      return { enabled, prefetchPages, thresholdPx, preloadScreens, bufferScreens, prewarm };
     }
 
     /** Distance from the loaded head at which the next page starts loading. */
@@ -285,6 +298,56 @@ window.__ModuleLoader__.load({
         /* ignore */
       }
       return false;
+    }
+
+    /**
+     * Resolve the real scrollport for a Chat column. The official marker is the
+     * normal case, but the dsh-mobile overlay can move overflow to an inner
+     * `_scroll` node (and mark it with data-dsh-mobile-message-scroll). Prefer
+     * whichever visible ancestor actually has scrollable overflow.
+     */
+    function resolveScroller(root, flow) {
+      if (!root || !flow) return null;
+      const candidates = [];
+      const add = (el) => {
+        if (!el || candidates.includes(el)) return;
+        try {
+          if (el.nodeType === 1 && el.contains(flow)) candidates.push(el);
+        } catch {
+          /* ignore */
+        }
+      };
+      add(root.querySelector('[data-dsh-mobile-message-scroll]'));
+      add(root.querySelector('[data-conversation-scroll]'));
+      let parent = flow.parentElement;
+      let depth = 0;
+      while (parent && parent !== root && depth < 24) {
+        add(parent);
+        parent = parent.parentElement;
+        depth += 1;
+      }
+      let best = null;
+      let bestScore = -1;
+      for (const el of candidates) {
+        if (!elementVisible(el)) continue;
+        let overflowY = '';
+        try {
+          overflowY = String((typeof window !== 'undefined'
+            ? window.getComputedStyle(el).overflowY
+            : '') || '');
+        } catch {
+          overflowY = '';
+        }
+        const scrollable = Number(el.scrollHeight) > Number(el.clientHeight) + 4;
+        const explicitOverflow = /(auto|scroll|overlay)/.test(overflowY);
+        const score = (scrollable ? 1000 : 0) + (explicitOverflow ? 200 : 0)
+          + Math.min(80, (Number(el.clientHeight) || 0) / 10);
+        if (score > bestScore) {
+          bestScore = score;
+          best = el;
+        }
+      }
+      return best || candidates[0] || null;
     }
 
     function classTokens(el) {
@@ -522,6 +585,7 @@ window.__ModuleLoader__.load({
 
         this.openEntries = null;
         this.prefetchedPages = 0;
+        this.bufferedPages = 0;
         this.prefetchedEntries = 0;
         this.prefetchStopped = false;
         this.lastWindowEntries = null;
@@ -543,6 +607,11 @@ window.__ModuleLoader__.load({
           autoMarginPx: null,
           openEntries: null,
           prefetchedPages: 0,
+          bufferedPages: 0,
+          bufferShortfallPx: null,
+          scrollHeight: null,
+          clientHeight: null,
+          scrollerMarker: null,
           prefetchedEntries: 0,
           inFlight: false,
           fastScrolling: false,
@@ -582,6 +651,11 @@ window.__ModuleLoader__.load({
         this.onScrollEnd = () => this.handleScrollEnd();
         this.onKeyDown = (event) => this.handleKeyDown(event);
         this.onPagerClick = (event) => this.handlePagerClick(event);
+        this.onPrewarmOver = (event) => this.handlePrewarmOver(event);
+        this.onPrewarmDown = (event) => this.handlePrewarmDown(event);
+        this.prewarmTimer = null;
+        this.prewarmSeen = new Map();
+        this.prewarmInflight = new Map();
       }
 
       start() {
@@ -619,6 +693,12 @@ window.__ModuleLoader__.load({
             this.observer = null;
           }
         }
+        try {
+          document.addEventListener('pointerover', this.onPrewarmOver, true);
+          document.addEventListener('pointerdown', this.onPrewarmDown, true);
+        } catch {
+          /* prewarm is best-effort */
+        }
         this.sync();
         try {
           // The MutationObserver is the primary discovery path. The interval
@@ -632,12 +712,30 @@ window.__ModuleLoader__.load({
         } catch {
           this.watchdogTimer = null;
         }
-        if (this.debug) this.installDebugApi();
+        this.installDebugApi();
       }
 
       dispose() {
         if (this.disposed) return;
         this.disposed = true;
+        try {
+          document.removeEventListener('pointerover', this.onPrewarmOver, true);
+          document.removeEventListener('pointerdown', this.onPrewarmDown, true);
+        } catch {
+          /* ignore */
+        }
+        if (this.prewarmTimer !== null) {
+          clearTimeout(this.prewarmTimer);
+          this.prewarmTimer = null;
+        }
+        for (const controller of this.prewarmInflight.values()) {
+          try {
+            controller.abort();
+          } catch {
+            /* ignore */
+          }
+        }
+        this.prewarmInflight.clear();
         this.teardownBinding();
         if (this.observer) {
           try {
@@ -711,10 +809,10 @@ window.__ModuleLoader__.load({
         }
         for (const root of ordered) {
           if (!elementVisible(root)) continue;
-          const scroller = root.querySelector('[data-conversation-scroll]');
-          if (!scroller || !elementVisible(scroller)) continue;
-          const flow = scroller.querySelector('[data-chat-flow]');
+          const flow = root.querySelector('[data-chat-flow]');
           if (!flow || !elementVisible(flow)) continue;
+          const scroller = resolveScroller(root, flow);
+          if (!scroller || !elementVisible(scroller)) continue;
           const id = root.getAttribute('data-conversation-session');
           if (!id) continue;
           const height = Number(scroller.clientHeight) || 0;
@@ -788,6 +886,7 @@ window.__ModuleLoader__.load({
           this.wasOpen = true;
           this.stats.openEntries = carried.openEntries;
           this.stats.prefetchedPages = carried.prefetchedPages;
+          this.stats.bufferedPages = carried.bufferedPages;
           this.stats.prefetchedEntries = carried.prefetchedEntries;
         }
         this.resolveBinding();
@@ -836,6 +935,7 @@ window.__ModuleLoader__.load({
           this.carriedPrefetch = {
             sessionId: this.sessionId,
             prefetchedPages: this.prefetchedPages,
+            bufferedPages: this.bufferedPages,
             prefetchedEntries: this.prefetchedEntries,
             prefetchStopped: this.prefetchStopped,
             openEntries: this.openEntries,
@@ -871,12 +971,14 @@ window.__ModuleLoader__.load({
         this.lastScrollAt = 0;
         this.openEntries = null;
         this.prefetchedPages = 0;
+        this.bufferedPages = 0;
         this.prefetchedEntries = 0;
         this.prefetchStopped = false;
         this.lastWindowEntries = null;
         this.wasOpen = false;
         this.stats.openEntries = null;
         this.stats.prefetchedPages = 0;
+        this.stats.bufferedPages = 0;
         this.stats.prefetchedEntries = 0;
         this.stats.chainCount = 0;
         this.stats.inFlight = false;
@@ -1033,7 +1135,7 @@ window.__ModuleLoader__.load({
           this.stopChain();
           return;
         }
-        if (this.settings.prefetchPages <= 0) this.cancelPrefetch();
+        if (this.settings.prefetchPages <= 0 && this.settings.bufferScreens <= 0) this.cancelPrefetch();
         this.maybeSchedulePrefetch();
       }
 
@@ -1098,22 +1200,32 @@ window.__ModuleLoader__.load({
       resetPrefetchWindow(entries) {
         this.cancelPrefetch();
         this.prefetchedPages = 0;
+        this.bufferedPages = 0;
         this.prefetchedEntries = 0;
         this.prefetchStopped = !openWindowAllowed(entries);
         this.openEntries = entries;
         this.stats.openEntries = entries;
         this.stats.prefetchedPages = 0;
+        this.stats.bufferedPages = 0;
         this.stats.prefetchedEntries = 0;
         if (this.prefetchStopped) {
           this.debugLog('skip prefetch: initial window is heavy', entries);
         }
       }
 
+      bufferShortfall() {
+        if (!this.scroller) return 0;
+        const target = (Number(this.scroller.clientHeight) || 0) * this.settings.bufferScreens;
+        return Math.max(0, target - (Number(this.scroller.scrollHeight) || 0));
+      }
+
       prefetchDue() {
-        return this.settings.enabled
-          && this.settings.prefetchPages > 0
-          && this.prefetchedPages < this.settings.prefetchPages
-          && !this.prefetchStopped;
+        if (!this.settings.enabled || this.prefetchStopped) return false;
+        const countTarget = this.settings.prefetchPages > 0
+          && this.prefetchedPages < this.settings.prefetchPages;
+        const bufferTarget = this.bufferedPages < BUFFER_MAX_PAGES
+          && this.bufferShortfall() > 0;
+        return countTarget || bufferTarget;
       }
 
       canPrefetchNow() {
@@ -1668,8 +1780,10 @@ window.__ModuleLoader__.load({
           );
         } else {
           this.prefetchedPages += 1;
+          this.bufferedPages += 1;
           this.prefetchedEntries += delta;
           this.stats.prefetchedPages = this.prefetchedPages;
+          this.stats.bufferedPages = this.bufferedPages;
           this.stats.prefetchedEntries = this.prefetchedEntries;
           if (status === 'settled') this.stats.prefetchLoads += 1;
           if (status === 'settled'
@@ -1694,8 +1808,8 @@ window.__ModuleLoader__.load({
           } else if (delta > MAX_PAGE_ENTRIES || this.prefetchedEntries > MAX_PREFETCH_ENTRIES) {
             this.prefetchStopped = true;
             this.debugLog('prefetch budget reached', this.prefetchedEntries, delta);
-          } else if (this.prefetchedPages >= this.settings.prefetchPages) {
-            // target reached; nothing to do
+          } else if (!this.prefetchDue()) {
+            // count and buffer targets reached; nothing to do
           } else {
             this.schedulePrefetchGap();
           }
@@ -1935,6 +2049,77 @@ window.__ModuleLoader__.load({
         }
       }
 
+      pagerDistance() {
+        if (!this.scroller) return null;
+        const pager = this.findPager();
+        if (!pager) return null;
+        try {
+          return Math.round(pager.button.getBoundingClientRect().top - this.scroller.getBoundingClientRect().top);
+        } catch {
+          return null;
+        }
+      }
+
+      handlePrewarmOver(event) {
+        if (this.disposed || !this.settings.prewarm) return;
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const row = target.closest('[data-row-key^="session:"]');
+        if (!row) return;
+        if (event.relatedTarget instanceof Node && row.contains(event.relatedTarget)) return;
+        const id = row.getAttribute('data-row-key')?.slice('session:'.length);
+        this.schedulePrewarm(id, 220);
+      }
+
+      handlePrewarmDown(event) {
+        if (this.disposed || !this.settings.prewarm) return;
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const row = target.closest('[data-row-key^="session:"]');
+        if (!row) return;
+        const id = row.getAttribute('data-row-key')?.slice('session:'.length);
+        this.schedulePrewarm(id, 0);
+      }
+
+      schedulePrewarm(id, delay) {
+        if (!id || !this.settings.prewarm || this.disposed) return;
+        if (this.prewarmSeen.has(id) && now() - this.prewarmSeen.get(id) < 60000) return;
+        if (this.prewarmTimer !== null) clearTimeout(this.prewarmTimer);
+        this.prewarmTimer = setTimeout(() => {
+          this.prewarmTimer = null;
+          this.prewarmSession(id);
+        }, Math.max(0, delay));
+      }
+
+      prewarmSession(id) {
+        if (!id || this.disposed || !this.settings.prewarm) return;
+        try {
+          if (this.ctx.sessions.binding(id)) return;
+        } catch {
+          /* ignore */
+        }
+        if (this.prewarmInflight.has(id)) return;
+        const remote = this.ctx.remote?.session;
+        if (!remote || typeof remote.page !== 'function') return;
+        const controller = new AbortController();
+        this.prewarmInflight.set(id, controller);
+        this.prewarmSeen.set(id, now());
+        this.debugLog('prewarming session', id);
+        Promise.resolve(remote.page({
+          address: { kind: 'session', sessionId: id },
+          throughSeq: Number.MAX_SAFE_INTEGER,
+          maxMessages: 1,
+          turnWindow: { minMessages: 1, minTurns: 1 },
+        }, controller.signal))
+          .then((result) => {
+            if (!result || result.ok !== true) this.debugLog('prewarm returned failure', id);
+          })
+          .catch((error) => this.debugLog('prewarm failed', id, error))
+          .finally(() => {
+            if (this.prewarmInflight.get(id) === controller) this.prewarmInflight.delete(id);
+          });
+      }
+
       noteTailMarker() {
         if (!this.scroller) return;
         try {
@@ -1982,6 +2167,15 @@ window.__ModuleLoader__.load({
               running: snapshot ? snapshot.running : null,
               openEntries: controller.openEntries,
               prefetchedPages: controller.prefetchedPages,
+              bufferedPages: controller.bufferedPages,
+              bufferShortfallPx: Math.round(controller.bufferShortfall()),
+              scrollHeight: controller.scroller ? controller.scroller.scrollHeight : null,
+              clientHeight: controller.scroller ? controller.scroller.clientHeight : null,
+              scrollerMarker: controller.scroller
+                ? [controller.scroller.getAttribute('data-conversation-scroll') !== null ? 'conversation-scroll' : '', controller.scroller.getAttribute('data-dsh-mobile-message-scroll') !== null ? 'mobile-message-scroll' : ''].filter(Boolean).join(',')
+                : null,
+              pagerDistancePx: controller.pagerDistance(),
+              dshMobile: isMobileOverlay(document),
               prefetchStopped: controller.prefetchStopped,
               autoMarginPx: Math.round(controller.autoMargin()),
               chainActive: controller.chainActive,
@@ -1995,6 +2189,7 @@ window.__ModuleLoader__.load({
               sessionId: controller.sessionId,
               openEntries: controller.openEntries,
               prefetchedPages: controller.prefetchedPages,
+              bufferedPages: controller.bufferedPages,
               prefetchedEntries: controller.prefetchedEntries,
               prefetchStopped: controller.prefetchStopped,
               armed: controller.armed,
@@ -2152,6 +2347,21 @@ window.__ModuleLoader__.load({
               h('option', { key: '2', value: '2' }, t('twoPages')),
             ]),
           ]),
+          h('label', { key: 'buffer-label', style: labeledControlStyle }, [
+            t('buffer'),
+            h('select', {
+              key: 'buffer',
+              value: String(value.bufferScreens),
+              'aria-label': t('buffer'),
+              disabled: !enabled,
+              style: Object.assign({}, selectStyle, { opacity: enabled ? 1 : 0.5 }),
+              onChange: (event) => store.update({ bufferScreens: Number(event.target.value) }),
+            }, [
+              h('option', { key: '2', value: '2' }, t('twoScreens')),
+              h('option', { key: '3', value: '3' }, t('threeScreens')),
+              h('option', { key: '4', value: '4' }, t('fourScreens')),
+            ]),
+          ]),
           h('button', {
             key: 'switch',
             type: 'button',
@@ -2227,7 +2437,7 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['sessions', 'slots', 'locale'],
+      inject: ['sessions', 'slots', 'locale', 'remote'],
       apply,
       __internals: {
         VERSION,
@@ -2242,6 +2452,7 @@ window.__ModuleLoader__.load({
         findPagerButton,
         topVisibleRow,
         findRowByKey,
+        resolveScroller,
         elementVisible,
         mutationMightChangeBinding,
         isEditable,

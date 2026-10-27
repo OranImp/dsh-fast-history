@@ -15,5 +15,8 @@
   "lead": "Lead",
   "oneScreen": "1 screen",
   "oneAndHalfScreens": "1.5 screens",
-  "twoScreens": "2 screens"
+  "twoScreens": "2 screens",
+  "buffer": "Buffer",
+  "threeScreens": "3 screens",
+  "fourScreens": "4 screens"
 }

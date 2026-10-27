@@ -15,6 +15,7 @@
   </style>
 </head>
 <body>
+  <div id="session-row" data-row-key="session:warm-1" style="height:24px">warm row</div>
   <div id="conversation" data-conversation-session="s1">
     <div id="scroller" data-conversation-scroll="">
       <div id="chat-root" data-chat-following-tail="">
@@ -129,6 +130,7 @@
       };
       const binding = { session, eventSource };
       window.__sessions = { s1: binding };
+      window.__prewarmRequests = [];
       window.__fixture = {
         state,
         binding,
@@ -170,6 +172,14 @@
         const ctx = {
           sessions: {
             binding: (id) => window.__sessions[id],
+          },
+          remote: {
+            session: {
+              page: async (request, signal) => {
+                window.__prewarmRequests.push(request);
+                return { ok: true, value: { records: [], hasMore: false } };
+              },
+            },
           },
           slots: {
             inject: () => () => {},
