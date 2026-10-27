@@ -437,6 +437,12 @@ def main() -> None:
             assert phone_count == 1, f"phone prefetch should load one page, got {phone_count}"
             assert phone_diag["mobileContext"] is True, phone_diag
             assert phone_stats["prefetchLoads"] == 1, phone_stats
+            assert phone.evaluate("""() => {
+              const pager = document.getElementById('pager');
+              const wrapper = pager.parentElement;
+              return pager.offsetParent === null
+                || getComputedStyle(wrapper).display === 'none';
+            }"""), "mobile pager wrapper should be hidden"
 
             phone.evaluate(
                 """() => {
