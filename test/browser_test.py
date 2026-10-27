@@ -610,6 +610,7 @@ def main() -> None:
                   window.__noAnchor = true;
                   localStorage.setItem('dsh-fast-history.settings.v1', JSON.stringify({
                     enabled: true, prefetchPages: 0, thresholdPx: 96, preloadScreens: 1.5,
+                    hidePager: false,
                   }));
                   localStorage.setItem('dsh-fast-history.debug', '1');
                 }"""

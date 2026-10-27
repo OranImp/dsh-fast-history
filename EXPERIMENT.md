@@ -1,4 +1,4 @@
-# Experimental branch: mobile-seamless (0.3.0-exp.1)
+# Experimental branch: mobile-seamless (0.3.1-exp.1)
 
 This directory is the working copy for the **`experiment/mobile-seamless`** branch. It is not the stable 0.2.5 source.
 
@@ -14,6 +14,7 @@ The stable 0.2.5 loader fixes the pager jump, but on a phone history could still
 - **Minimum history buffer**: after open, keep pulling pages until `scrollHeight >= clientHeight × bufferScreens` (default 3 screens, cap 4 pages), independent of the normal prefetch count. This makes the pager sit far above the viewport instead of in view.
 - **Real scrollport resolver**: prefer the visible scrollable ancestor of `[data-chat-flow]`, including `[data-chat-message-scroll]` / `[data-dsh-mobile-message-scroll]`, with `[data-conversation-scroll]` as the normal fallback.
 - **dsh-mobile pager interception**: all mobile pager clicks, including `button.click()` from dsh-mobile, are routed through the anchored direct path.
+- **Hide the mobile pager**: the official wrapper is hidden on phones so the loader is not visible; desktop keeps the button.
 - **Hover prewarm (open-speed experiment)**: hovering a session row (`[data-row-key="session:<id>"]`) for ~220 ms calls the cold-safe `ctx.remote.session.page` with a one-message page. The host parses/caches the session before the click; the click then reuses the prepared session. TTL is 60 s and already-open sessions are skipped. This is best-effort: failures are swallowed and never block opening.
 - **Diagnostics**: `window.__DSH_FAST_HISTORY__.diagnostics()` now always exposes the selected scroller, scrollHeight/clientHeight, buffer shortfall, pager distance, `dshMobile`, and buffer page counts.
 

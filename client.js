@@ -18,7 +18,7 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const h = React.createElement;
 
-    const VERSION = '0.3.0-exp.1';
+    const VERSION = '0.3.1-exp.1';
     const NS = 'dsh-fast-history';
     const SETTINGS_KEY = 'dsh-fast-history.settings.v1';
     const DEBUG_KEY = 'dsh-fast-history.debug';
@@ -30,6 +30,7 @@ window.__ModuleLoader__.load({
       preloadScreens: 1.5,
       bufferScreens: 3,
       prewarm: true,
+      hidePager: true,
     });
 
     const COOLDOWN_MS = 400;
@@ -127,7 +128,8 @@ window.__ModuleLoader__.load({
       if (src.bufferScreens === null || !Number.isFinite(bufferScreens)) bufferScreens = DEFAULTS.bufferScreens;
       bufferScreens = Math.max(2, Math.min(4, Math.round(bufferScreens)));
       const prewarm = src.prewarm === undefined || src.prewarm === null ? DEFAULTS.prewarm : normalizeEnabled(src.prewarm);
-      return { enabled, prefetchPages, thresholdPx, preloadScreens, bufferScreens, prewarm };
+      const hidePager = src.hidePager === undefined || src.hidePager === null ? DEFAULTS.hidePager : normalizeEnabled(src.hidePager);
+      return { enabled, prefetchPages, thresholdPx, preloadScreens, bufferScreens, prewarm, hidePager };
     }
 
     /** Distance from the loaded head at which the next page starts loading. */
@@ -348,6 +350,16 @@ window.__ModuleLoader__.load({
         }
       }
       return best || candidates[0] || null;
+    }
+
+    function ensureHidePagerStyle() {
+      if (typeof document === 'undefined' || !document.head) return;
+      const id = 'dsh-fast-history-hide-pager-style';
+      if (document.getElementById(id)) return;
+      const style = document.createElement('style');
+      style.id = id;
+      style.textContent = '[data-dsh-fast-history-hide-pager] [data-chat-flow] > [class*="_older"] { display: none !important; }';
+      document.head.appendChild(style);
     }
 
     function classTokens(el) {
@@ -699,6 +711,7 @@ window.__ModuleLoader__.load({
         } catch {
           /* prewarm is best-effort */
         }
+        ensureHidePagerStyle();
         this.sync();
         try {
           // The MutationObserver is the primary discovery path. The interval
@@ -870,6 +883,7 @@ window.__ModuleLoader__.load({
         this.rootEl = found.root;
         this.scroller = found.scroller;
         this.sessionId = found.sessionId;
+        this.syncHidePager();
         this.lastTop = Number(this.scroller.scrollTop) || 0;
         this.bindRetries = 0;
         const carried = this.carriedPrefetch;
@@ -931,6 +945,13 @@ window.__ModuleLoader__.load({
 
       teardownBinding() {
         this.generation += 1;
+        if (this.rootEl) {
+          try {
+            this.rootEl.removeAttribute('data-dsh-fast-history-hide-pager');
+          } catch {
+            /* ignore */
+          }
+        }
         if (this.sessionId !== null && this.session) {
           this.carriedPrefetch = {
             sessionId: this.sessionId,
@@ -1126,9 +1147,23 @@ window.__ModuleLoader__.load({
 
       // -- settings / visibility ----------------------------------------
 
+      syncHidePager() {
+        if (!this.rootEl) return;
+        try {
+          if (this.settings.enabled && this.settings.hidePager && isMobileContext(document)) {
+            this.rootEl.setAttribute('data-dsh-fast-history-hide-pager', '');
+          } else {
+            this.rootEl.removeAttribute('data-dsh-fast-history-hide-pager');
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
       refreshSettings() {
         if (this.disposed) return;
         this.settings = this.store.get();
+        this.syncHidePager();
         if (!this.settings.enabled) {
           this.cancelPrefetch();
           this.disarm('disabled');
@@ -2176,6 +2211,7 @@ window.__ModuleLoader__.load({
                 : null,
               pagerDistancePx: controller.pagerDistance(),
               dshMobile: isMobileOverlay(document),
+              hidePager: controller.rootEl ? controller.rootEl.hasAttribute('data-dsh-fast-history-hide-pager') : false,
               prefetchStopped: controller.prefetchStopped,
               autoMarginPx: Math.round(controller.autoMargin()),
               chainActive: controller.chainActive,
@@ -2314,7 +2350,7 @@ window.__ModuleLoader__.load({
       return h('div', { style: rowStyle }, [
         h('div', { key: 'text', style: rowTextStyle }, [
           h('div', { key: 'title', style: titleStyle }, t('title')),
-          h('div', { key: 'desc', style: descriptionStyle }, t('description')),
+          h('div', { key: 'desc', style: descriptionStyle }, t('description') + ' · 0.3.1-exp.1'),
         ]),
         h('div', { key: 'controls', style: controlStyle }, [
           h('label', { key: 'lead-label', style: labeledControlStyle }, [
@@ -2437,7 +2473,7 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['sessions', 'slots', 'locale', 'remote'],
+      inject: ['sessions', 'slots', 'locale'],
       apply,
       __internals: {
         VERSION,
